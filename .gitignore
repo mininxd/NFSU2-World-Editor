@@ -1,0 +1,22 @@
+# NEVER commit game files or data derived from them
+TRACKS/
+GLOBAL/
+CARS/
+*.BUN
+*.bun
+*.BIN
+*.bin
+*.LZC
+*.lzc
+*.hoo
+out/
+*.blend
+*.blend1
+*.obj
+*.mtl
+*.tga
+*.dds
+refs/
+.venv/
+__pycache__/
+*.pyc
