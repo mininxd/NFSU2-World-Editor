@@ -17,8 +17,13 @@ from ..core import (find, parse_object, section_table, build_model_index,
 STORAGE_DISTANCE = 1500.0   # models this far from the section centre sit on the 'storage grid'
 
 
+ALL_SECTIONS = ('ALL', '*')
+
+
 def parse_sections(text):
-    return [s.strip().upper() for s in text.replace(';', ',').replace(' ', ',').split(',') if s.strip()]
+    """Split a tag list. ``'all'`` / ``'*'`` (or an empty string) means every section."""
+    tags = [s.strip().upper() for s in text.replace(';', ',').replace(' ', ',').split(',') if s.strip()]
+    return [] if any(t in ALL_SECTIONS for t in tags) else tags
 
 
 def _material(texhash, cache):
@@ -79,6 +84,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
                  log=print):
     """Import ``sections`` of ``region`` from the TRACKS folder into the current scene.
 
+    An empty ``sections`` list (or ``'all'``) imports every section of the region.
     Returns ``{tag: (solids, triangles, scenery_instances)}``. Raises
     FileNotFoundError / KeyError with a readable message on bad input.
     """
@@ -87,6 +93,8 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
         sections = parse_sections(sections)
     tracks_dir, l4_path, stream_path = region_paths(tracks, region)
     table = {e['tag'].upper(): e for e in section_table(read_bytes(l4_path))}
+    if not sections:
+        sections = sorted(table)
     unknown = [t for t in sections if t not in table]
     if unknown:
         raise KeyError('Unknown section(s) %s in %s. Examples: %s' % (

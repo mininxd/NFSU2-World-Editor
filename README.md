@@ -39,7 +39,7 @@ Planned: real textures, writing edited meshes back into `STREAML4RA.BUN`, collis
 |---|---|
 | TRACKS Folder | Optional override. You can give the `TRACKS` folder or the game folder that contains it |
 | Region | e.g. `L4RA` (Bayview). Leave empty to detect it from the file name |
-| Sections | Comma-separated section tags, e.g. `C21,C22,B26` (list them with the `sections` tool below) |
+| Sections | Comma-separated section tags, e.g. `C21,C22,B26`, or `all` for the whole region (list them with the `sections` tool below) |
 | Include Scenery Instances | Also place props such as trees, walls, and signs |
 | Clear Scene First | Delete existing objects before importing |
 
@@ -60,6 +60,7 @@ python3 -m nfsu2_world_editor.cli.sectionmap --tracks "/path/to/TRACKS" --out se
 
 # headless Blender import without installing the add-on: save .blend/.obj and render a preview
 blender -b --factory-startup --python tools/import_world.py -- --tracks "C:/Games/NFSU2/TRACKS" --sections C21,C22,B26 --instances --blend out.blend --png preview.png
+blender -b --factory-startup --python tools/import_world.py -- --tracks "C:/Games/NFSU2/TRACKS" --sections all --instances --blend bayview_full.blend
 ```
 
 ## Development

@@ -7,6 +7,7 @@
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,7 +19,7 @@ def parse(argv):
                                  description='Import NFSU2 world sections into Blender')
     ap.add_argument('--tracks', required=True, help='game TRACKS folder (or the game folder)')
     ap.add_argument('--region', default='L4RA')
-    ap.add_argument('--sections', default='C21', help='comma-separated tags, e.g. C21,C22,B26')
+    ap.add_argument('--sections', default='C21', help='comma-separated tags, e.g. C21,C22,B26, or "all" for the whole region')
     ap.add_argument('--instances', action='store_true', help='also place scenery instances')
     ap.add_argument('--keep', action='store_true', help='keep the default scene objects')
     ap.add_argument('--blend', help='save a .blend here')
@@ -32,11 +33,15 @@ def main():
     import bpy
     if not a.keep:
         importer.clear_scene()
+    t0 = time.time()
     try:
-        importer.import_world(a.tracks, a.region, a.sections, a.instances)
+        stats = importer.import_world(a.tracks, a.region, a.sections, a.instances)
     except (FileNotFoundError, KeyError) as ex:
         print('[nfsu2] error:', ex, file=sys.stderr)
         sys.exit(1)
+    print('[nfsu2] imported %d section(s): %d solids, %d solid tris, %d scenery instances in %.1fs'
+          % (len(stats), sum(v[0] for v in stats.values()), sum(v[1] for v in stats.values()),
+             sum(v[2] for v in stats.values()), time.time() - t0))
     if a.blend:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(a.blend))
     if a.obj:

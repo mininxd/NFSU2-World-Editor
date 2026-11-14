@@ -30,7 +30,8 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         default='')
     sections: StringProperty(
         name='Sections',
-        description='Comma-separated streaming section tags, e.g. C21,C22,B26',
+        description='Comma-separated streaming section tags, e.g. C21,C22,B26. '
+                    'Use "all" (or leave empty) to import the whole region',
         default='C21,C22,B26')
     instances: BoolProperty(
         name='Include Scenery Instances',
@@ -55,10 +56,7 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         if tracks is None:
             self.report({'ERROR'}, 'Pick a .BUN file inside TRACKS or set the TRACKS folder')
             return {'CANCELLED'}
-        sections = importer.parse_sections(self.sections)
-        if not sections:
-            self.report({'ERROR'}, 'Enter at least one section tag, e.g. C21')
-            return {'CANCELLED'}
+        sections = importer.parse_sections(self.sections)  # [] = whole region
         if self.clear:
             importer.clear_scene()
         try:
