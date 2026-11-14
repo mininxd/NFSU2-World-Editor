@@ -12,6 +12,7 @@ A **two-way converter** for world geometry and textures: game files → editable
 | | Game → editable | Editable → game |
 |---|---|---|
 | Geometry (`0x80134010` SolidObjects) | Blender import of any sections, with scenery instances | Blender export: edited meshes (positions, UVs, prelight colours, any vertex/triangle count ≤ 65535 verts) and **new objects** |
+| Cars (`CARS/<NAME>/GEOMETRY.BIN` + `TEXTURES.BIN`) | Blender import of a stock kit (KIT00 + BASE, four wheels, paint colour on CARSKIN) with compressed JDLZ/HUFF textures | Blender export of edited part meshes to a new `GEOMETRY.BIN`; no-edit parse/write is byte-identical. Writing *edited* compressed textures back is not implemented yet |
 | Textures (`0xB3300000` packs) | PNG/TGA export; real UV-mapped image materials in Blender (alpha only where the game uses it) | Re-import of edited PNG/TGA: re-encoded to the original format (DXT1/DXT3/DXT5/P8/ARGB8), same size, mips regenerated |
 | Section layout | parsed | sections stay on 2 KiB boundaries, and at their original offsets where the padding in front of them absorbs the change; `L4Rx.BUN` section table (offset / size / size-without-pixels) updated |
 | Collision (`0x80034130`) | parsed; optional wireframe `COLLISION_<tag>` mesh in Blender | new objects get ground collision (and optional walls); grid, cell refs and bounds rebuilt exactly like the shipped packs |
@@ -57,6 +58,25 @@ Other limitations: textures can't be resized or added yet (same size and format 
 | Skip Backdrops (PAN_*) | Leave out the distant panorama and skydome models |
 | Show Collision | Add a wireframe `COLLISION_<tag>` mesh per section (grey = road, green = grass, red = walls); it's read-only and never exported |
 | Clear Scene First | Delete existing objects before importing |
+
+### Cars
+**File > Import > NFSU2 Car (GEOMETRY.BIN)**, then pick `CARS/MIATA/GEOMETRY.BIN` (or any other car folder). The add-on assembles the stock kit (`KIT00` + `BASE`, highest LOD), hides internals such as the engine, and places four wheels using axle data from `GLOBAL/GLOBALB.BUN` when that folder can be found. Paintable `CARSKIN` body parts take the *Paint* colour; glass, rubber and chrome use their material class. **File > Export > NFSU2 Car (GEOMETRY.BIN)** writes a new `GEOMETRY.BIN` (it will not overwrite the original) and copies `TEXTURES.BIN` unchanged.
+
+Headless import:
+
+```
+blender -b --factory-startup --python tools/import_car.py -- --car "C:/Games/NFSU2/CARS/MIATA" --blend miata.blend --paint 0.75,0.06,0.07
+```
+
+Command-line tools (no Blender needed):
+
+```
+python3 -m nfsu2_world_editor.cli.cars list "/path/to/CARS/MIATA"
+python3 -m nfsu2_world_editor.cli.cars roundtrip "/path/to/CARS/MIATA" --meshes --out OUTDIR
+python3 -m nfsu2_world_editor.cli.cars export-textures "/path/to/CARS/MIATA" --out tex
+```
+
+`roundtrip` must report `GEOMETRY.BIN` (and the unmodified `TEXTURES.BIN` tree) as byte-identical. Re-encoding every mesh with `--meshes` is also lossless on shipped cars.
 
 Each object keeps `nfs_*` custom properties (section, hash, file offset, and a checksum) that the exporter uses. The game uses Z-up, and coordinates are kept 1:1. To see textures in the viewport, switch Solid shading to **Texture** colour, or use Material Preview. Textures a region doesn't carry itself (lights, signs, effect sprites) are looked up in the game's shared packs in the `GLOBAL` folder next to `TRACKS` (`GLOBALB.BUN`, `InGameCommon.bun`, ...); the headless importer takes `--global-dir` if that folder lives elsewhere.
 
@@ -159,19 +179,20 @@ Layout:
   - `bchunk`: byte-preserving chunk tree. Rebuilds alignment filler and padding when sizes change
   - `stream`: region read/write with 2 KiB section relocation and L4 table update
   - `meshcodec`, `solidlist`: lossless SolidObject decode/encode, adding objects
-  - `tpk`, `dxt`, `image`: texture packs, DXT1/3/5, P8 and ARGB codecs, PNG/TGA
+  - `tpk`, `dxt`, `image`, `compress`: texture packs (track and compressed car TPK), DXT1/3/5, P8 and ARGB codecs, PNG/TGA, JDLZ/HUFF
+  - `cars`: car geometry (same SolidObject family), stock-kit assembly, wheel axles, parse/write
   - `chunks`, `world`, `files`, `writer`: readers used by the importer, plus synthetic test data
   - `collision`, `scenery`, `visibility`, `routes`: collision packs, scenery placements and trees, drivable boundaries and visible lists, road graph
   - `world_edit`, `road_builder`, `road_mod`: placing models, adding collision, moving props, and the road builder
 - `nfsu2_world_editor/blender/`: importer, textures/materials, exporter, File > Import/Export operators
 - `tools/`: headless Blender import/export and the round-trip self-test
 - `nfsu2_world_editor/cli/`: command-line tools
-- `tools/import_world.py`: headless Blender wrapper
+- `tools/import_world.py`, `tools/import_car.py`: headless Blender wrappers
 - `tests/`: pytest suite. CI runs it on Ubuntu and Windows and builds the zip.
 
 **Never commit game files** or anything derived from them (`.BUN`, `.BIN`, `.blend`, `.obj`, renders, dumps, exported textures). `.gitignore` blocks them.
 
-**Next steps:** rebuild collision for edited shipped objects, add routes to the road graph (minimap and GPS), and add or resize textures.
+**Next steps:** write edited car textures back (JDLZ/HUFF re-pack), rebuild collision for edited shipped world objects, add routes to the road graph (minimap and GPS), and add or resize world textures.
 
 ## Bahasa Indonesia (ringkas)
 Add-on Blender dan tool command-line buat membaca world NFSU2. Bisa jalan di **Windows dan Linux**. Repo ini cuma berisi source code, file game **tidak** disertakan.

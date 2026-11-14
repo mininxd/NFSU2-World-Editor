@@ -154,15 +154,97 @@ class EXPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ExportHelper):
         return {'FINISHED'}
 
 
+
+class IMPORT_SCENE_OT_nfsu2_car(bpy.types.Operator, ImportHelper):
+    """Import a Need for Speed: Underground 2 car (GEOMETRY.BIN + TEXTURES.BIN)"""
+    bl_idname = 'import_scene.nfsu2_car'
+    bl_label = 'Import NFSU2 Car'
+    bl_options = {'REGISTER', 'UNDO', 'PRESET'}
+
+    filename_ext = '.bin'
+    filter_glob: StringProperty(default='*.bin;*.BIN', options={'HIDDEN'})
+    kit: StringProperty(name='Kit', default='KIT00',
+                        description='Body kit to assemble (KIT00 is stock)')
+    lod: StringProperty(name='LOD', default='A',
+                        description='Preferred detail level (A is the highest)')
+    paint: StringProperty(
+        name='Paint (R,G,B)', default='0.75,0.06,0.07',
+        description='CARSKIN colour as 0-1 RGB, applied to the paintable body')
+    textures: BoolProperty(name='Load Textures', default=True)
+    global_dir: StringProperty(
+        name='GLOBAL Folder', description='Game GLOBAL folder for wheel axles and shared textures',
+        subtype='DIR_PATH', default='')
+    clear: BoolProperty(name='Clear Scene First', default=False)
+
+    def execute(self, context):
+        from . import car_importer, importer
+        if self.clear:
+            importer.clear_scene()
+        try:
+            paint = [float(x) for x in self.paint.split(',')]
+            if len(paint) == 3:
+                paint.append(1.0)
+            root = car_importer.import_car(
+                self.filepath, kit=self.kit.strip() or 'KIT00', lod=self.lod.strip() or 'A',
+                paint=tuple(paint), textures=self.textures,
+                global_dir=self.global_dir.strip() or None, context=context)
+        except (FileNotFoundError, ValueError) as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'NFSU2: imported car %s' % root.name)
+        return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        layout.prop(self, 'kit')
+        layout.prop(self, 'lod')
+        layout.prop(self, 'paint')
+        layout.prop(self, 'textures')
+        layout.prop(self, 'global_dir')
+        layout.prop(self, 'clear')
+
+
+class EXPORT_SCENE_OT_nfsu2_car(bpy.types.Operator, ExportHelper):
+    """Write an edited NFSU2 car back to a new GEOMETRY.BIN (never overwrites the source)"""
+    bl_idname = 'export_scene.nfsu2_car'
+    bl_label = 'Export NFSU2 Car'
+    bl_options = {'REGISTER'}
+
+    filename_ext = '.BIN'
+    filter_glob: StringProperty(default='*.bin;*.BIN', options={'HIDDEN'})
+    source: StringProperty(
+        name='Source GEOMETRY.BIN',
+        description='Original file the car was imported from (empty = remembered at import)',
+        subtype='FILE_PATH', default='')
+
+    def execute(self, context):
+        from . import car_importer
+        try:
+            st = car_importer.export_car(self.filepath, context,
+                                         source=bpy.path.abspath(self.source) if self.source else None)
+        except (RuntimeError, ValueError, FileNotFoundError) as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'NFSU2: exported car %s (%d part(s) re-encoded) -> %s'
+                    % (st['name'], st['edited'], st['path']))
+        return {'FINISHED'}
+
+
+
 def menu_func_export(self, context):
     self.layout.operator(EXPORT_SCENE_OT_nfsu2_world.bl_idname, text='NFSU2 World (.BUN)')
+    self.layout.operator(EXPORT_SCENE_OT_nfsu2_car.bl_idname, text='NFSU2 Car (GEOMETRY.BIN)')
 
 
 def menu_func_import(self, context):
     self.layout.operator(IMPORT_SCENE_OT_nfsu2_world.bl_idname, text='NFSU2 World (.BUN)')
+    self.layout.operator(IMPORT_SCENE_OT_nfsu2_car.bl_idname, text='NFSU2 Car (GEOMETRY.BIN)')
 
 
-classes = (IMPORT_SCENE_OT_nfsu2_world, EXPORT_SCENE_OT_nfsu2_world)
+classes = (IMPORT_SCENE_OT_nfsu2_world, EXPORT_SCENE_OT_nfsu2_world,
+           IMPORT_SCENE_OT_nfsu2_car, EXPORT_SCENE_OT_nfsu2_car)
 
 
 def register():

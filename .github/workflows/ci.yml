@@ -28,6 +28,9 @@ jobs:
           python -m nfsu2_world_editor.cli.textures --help
           python -m nfsu2_world_editor.cli.textures export --help
           python -m nfsu2_world_editor.cli.roundtrip --help
+          python -m nfsu2_world_editor.cli.cars --help
+          python -m nfsu2_world_editor.cli.cars list --help
+          python -m nfsu2_world_editor.cli.cars roundtrip --help
       - name: Build add-on zip
         run: python build_addon.py --out dist
       - uses: actions/upload-artifact@v4

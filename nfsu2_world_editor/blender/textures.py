@@ -33,7 +33,8 @@ class TextureLibrary:
         from ..core import bchunk, tpk
         from ..core.files import read_bytes
         try:
-            packs = list(tpk.iter_packs(bchunk.parse(read_bytes(path))))
+            buf = read_bytes(path)
+            packs = list(tpk.iter_packs(bchunk.parse(buf), buf))
         except Exception as e:  # compressed or non-chunk file
             if log:
                 log('[textures] skipped %s (%s)' % (path, type(e).__name__))
