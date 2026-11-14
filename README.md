@@ -60,7 +60,7 @@ Other limitations: textures can't be resized or added yet (same size and format 
 | Clear Scene First | Delete existing objects before importing |
 
 ### Cars
-**File > Import > NFSU2 Car (GEOMETRY.BIN)**, then pick `CARS/MIATA/GEOMETRY.BIN` (or any other car folder). The add-on assembles the stock kit (`KIT00` + `BASE`, highest LOD), hides internals such as the engine, and places four wheels using axle data from `GLOBAL/GLOBALB.BUN` when that folder can be found. Paintable `CARSKIN` body parts take the *Paint* colour; glass, rubber and chrome use their material class. **File > Export > NFSU2 Car (GEOMETRY.BIN)** writes a new `GEOMETRY.BIN` (it will not overwrite the original) and copies `TEXTURES.BIN` unchanged.
+**File > Import > NFSU2 Car (GEOMETRY.BIN)**, then pick `CARS/MIATA/GEOMETRY.BIN` (or any other car folder). The add-on assembles the stock kit (`KIT00` + `BASE`, highest LOD: body, bumpers, skirts, doors, hood, trunk, roof, mirrors, headlights, taillights, interior in `BASE`), hides internals such as the engine, and places four wheels (with stock rims) using axle data from `GLOBAL/GLOBALB.BUN` when that folder can be found. Paintable `CARSKIN` body parts take the *Paint* colour; windshields are tinted glass, and rubber, chrome, dull plastic and headlight glass use their material class. Left/right part matrices that are already baked into the mesh are not applied a second time. **File > Export > NFSU2 Car (GEOMETRY.BIN)** writes a new `GEOMETRY.BIN` (it will not overwrite the original) and copies `TEXTURES.BIN` unchanged.
 
 Headless import:
 

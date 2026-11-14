@@ -1,6 +1,6 @@
 [project]
 name = "nfsu2-world-editor"
-version = "0.4.0"
+version = "0.4.1"
 description = "Need for Speed: Underground 2 world tools and Blender add-on"
 requires-python = ">=3.8"
 

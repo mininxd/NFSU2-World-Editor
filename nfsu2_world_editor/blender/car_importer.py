@@ -7,22 +7,37 @@ from mathutils import Euler, Matrix, Vector
 
 from ..core import cars, meshcodec
 from ..core.files import read_bytes
-from .importer import build_mesh, game_matrix
-from .textures import TextureLibrary, build_material
+from .importer import game_matrix
+from .textures import TextureLibrary
 
 
 # Paint colours used when the part's material class is CARSKIN (no stored albedo).
 DEFAULT_PAINT = (0.75, 0.06, 0.07, 1.0)  # classic red
 
 CLASS_SHADERS = {
-    'CARSKIN': dict(metallic=0.35, roughness=0.28),
-    'WINDSHIELD': dict(metallic=0.0, roughness=0.05, transmission=1.0, alpha=0.25),
-    'HEADLIGHTGLASS': dict(metallic=0.0, roughness=0.08, transmission=0.7, alpha=0.4, emit=2.0),
-    'RUBBER': dict(metallic=0.0, roughness=0.7, colour=(0.03, 0.03, 0.03, 1)),
-    'MAGSILVER': dict(metallic=1.0, roughness=0.25, colour=(0.7, 0.7, 0.72, 1)),
-    'CHROME': dict(metallic=1.0, roughness=0.08, colour=(0.85, 0.85, 0.87, 1)),
-    'CARBOTTOM': dict(metallic=0.1, roughness=0.8, colour=(0.05, 0.05, 0.05, 1)),
+    'CARSKIN': dict(metallic=0.5, roughness=0.16, coat=0.4),
+    'WINDSHIELD': dict(metallic=0.0, roughness=0.04, transmission=0.95, alpha=0.42,
+                       colour=(0.03, 0.035, 0.04, 1), ior=1.45),
+    'HEADLIGHTGLASS': dict(metallic=0.0, roughness=0.05, transmission=0.35, alpha=0.7,
+                           emit=10.0, colour=(1.0, 0.98, 0.92, 1), ior=1.45),
+    'BRAKELIGHTGLASS': dict(metallic=0.0, roughness=0.06, transmission=0.65, alpha=0.55,
+                            emit=5.0, colour=(0.7, 0.02, 0.02, 1)),
+    'BRAKELIGHT': dict(metallic=0.0, roughness=0.3, emit=8.0, colour=(0.8, 0.02, 0.02, 1)),
+    'HEADLIGHT': dict(metallic=0.85, roughness=0.18, colour=(0.9, 0.9, 0.85, 1), emit=0.4),
+    'RUBBER': dict(metallic=0.0, roughness=0.75, colour=(0.03, 0.03, 0.03, 1)),
+    'MAGSILVER': dict(metallic=1.0, roughness=0.22, colour=(0.72, 0.72, 0.75, 1)),
+    'CHROME': dict(metallic=1.0, roughness=0.06, colour=(0.9, 0.9, 0.92, 1)),
+    'ALUMINUM': dict(metallic=1.0, roughness=0.35, colour=(0.65, 0.65, 0.67, 1)),
+    'CARBOTTOM': dict(metallic=0.1, roughness=0.85, colour=(0.04, 0.04, 0.04, 1)),
+    'BOTTOM': dict(metallic=0.1, roughness=0.85, colour=(0.04, 0.04, 0.04, 1)),
     'BLACK': dict(metallic=0.0, roughness=0.6, colour=(0.02, 0.02, 0.02, 1)),
+    'DULLPLASTIC': dict(metallic=0.0, roughness=0.65, colour=(0.045, 0.04, 0.04, 1)),
+    'TRIM': dict(metallic=0.25, roughness=0.28, colour=(0.02, 0.02, 0.02, 1)),
+    'TEXTURED': dict(metallic=0.12, roughness=0.45, colour=(0.06, 0.06, 0.06, 1)),
+    'CARBONFIBRE': dict(metallic=0.7, roughness=0.35, colour=(0.03, 0.03, 0.03, 1)),
+    'DECAL': dict(metallic=0.1, roughness=0.35, alpha_from_tex=True, clip=True),
+    'DEFROSTER': dict(metallic=0.0, roughness=0.04, transmission=0.95, alpha=0.4,
+                      colour=(0.03, 0.035, 0.04, 1), ior=1.45, detail=True),
 }
 
 
@@ -37,19 +52,24 @@ class _HashLib:
         return self.by_hash.get(h)
 
     def image(self, tex):
-        # reuse TextureLibrary.image by borrowing a dummy
         return TextureLibrary.image(self, tex)
 
 
-def _class_of(part, slot):
-    if slot < len(part.classes):
-        return cars.CLASS_NAMES.get(part.classes[slot])
-    if part.classes:
-        return cars.CLASS_NAMES.get(part.classes[0])
-    return None
+def _set_transmission(bsdf, value):
+    if 'Transmission Weight' in bsdf.inputs:
+        bsdf.inputs['Transmission Weight'].default_value = value
+    elif 'Transmission' in bsdf.inputs:
+        bsdf.inputs['Transmission'].default_value = value
 
 
-def _paint_material(name, colour, settings, tex=None, lib=None):
+def _set_ior(bsdf, value):
+    for key in ('IOR', 'Specular IOR Level'):
+        if key in bsdf.inputs and key == 'IOR':
+            bsdf.inputs[key].default_value = value
+            return
+
+
+def _paint_material(name, colour, settings, tex=None, lib=None, multiply_paint=False):
     m = bpy.data.materials.get(name)
     if m is not None:
         return m
@@ -58,88 +78,158 @@ def _paint_material(name, colour, settings, tex=None, lib=None):
     nt = m.node_tree
     nt.nodes.clear()
     out = nt.nodes.new('ShaderNodeOutputMaterial')
-    out.location = (500, 0)
+    out.location = (560, 0)
     bsdf = nt.nodes.new('ShaderNodeBsdfPrincipled')
-    bsdf.location = (200, 0)
+    bsdf.location = (220, 0)
     bsdf.inputs['Metallic'].default_value = settings.get('metallic', 0.0)
     bsdf.inputs['Roughness'].default_value = settings.get('roughness', 0.5)
+    if settings.get('coat') and 'Coat Weight' in bsdf.inputs:
+        bsdf.inputs['Coat Weight'].default_value = settings['coat']
+        if 'Coat Roughness' in bsdf.inputs:
+            bsdf.inputs['Coat Roughness'].default_value = 0.08
     col = settings.get('colour', colour)
+    img_node = None
     if tex is not None and lib is not None:
-        img = nt.nodes.new('ShaderNodeTexImage')
-        img.location = (-300, 0)
-        img.image = lib.image(tex)
-        # multiply texture by paint colour (CARSKIN)
-        mix = nt.nodes.new('ShaderNodeMix')
-        mix.data_type = 'RGBA'
-        mix.blend_type = 'MULTIPLY'
-        mix.location = (0, 0)
-        mix.inputs['Factor'].default_value = 1.0
-        mix.inputs[7].default_value = col
-        nt.links.new(img.outputs['Color'], mix.inputs[6])
-        nt.links.new(mix.outputs[2], bsdf.inputs['Base Color'])
+        img_node = nt.nodes.new('ShaderNodeTexImage')
+        img_node.location = (-360, 0)
+        img_node.image = lib.image(tex)
+        if multiply_paint:
+            mix = nt.nodes.new('ShaderNodeMix')
+            mix.data_type = 'RGBA'
+            mix.blend_type = 'MULTIPLY'
+            mix.location = (0, 0)
+            mix.inputs['Factor'].default_value = 1.0
+            mix.inputs[7].default_value = col
+            nt.links.new(img_node.outputs['Color'], mix.inputs[6])
+            nt.links.new(mix.outputs[2], bsdf.inputs['Base Color'])
+        else:
+            nt.links.new(img_node.outputs['Color'], bsdf.inputs['Base Color'])
     else:
         bsdf.inputs['Base Color'].default_value = col
     if settings.get('transmission'):
-        # Blender 4.x: Transmission input
-        if 'Transmission Weight' in bsdf.inputs:
-            bsdf.inputs['Transmission Weight'].default_value = settings['transmission']
-        elif 'Transmission' in bsdf.inputs:
-            bsdf.inputs['Transmission'].default_value = settings['transmission']
-        alpha = settings.get('alpha', 0.3)
-        bsdf.inputs['Alpha'].default_value = alpha
+        _set_transmission(bsdf, settings['transmission'])
+        if 'ior' in settings:
+            _set_ior(bsdf, settings['ior'])
+        bsdf.inputs['Alpha'].default_value = settings.get('alpha', 0.4)
         m.blend_method = 'BLEND'
         m.use_screen_refraction = True
         try:
+            m.use_backface_culling = False
             m.surface_render_method = 'BLENDED'
         except Exception:
             pass
+        # optional defroster / detail: mix texture onto the glass colour
+        if settings.get('detail') and img_node is not None:
+            mix = nt.nodes.new('ShaderNodeMix')
+            mix.data_type = 'RGBA'
+            mix.blend_type = 'MIX'
+            mix.location = (0, 80)
+            nt.links.new(img_node.outputs['Color'], mix.inputs[7])
+            mix.inputs[6].default_value = col
+            if 'Alpha' in img_node.outputs:
+                nt.links.new(img_node.outputs['Alpha'], mix.inputs['Factor'])
+            nt.links.new(mix.outputs[2], bsdf.inputs['Base Color'])
+    if settings.get('alpha_from_tex') and img_node is not None and 'Alpha' in img_node.outputs:
+        nt.links.new(img_node.outputs['Alpha'], bsdf.inputs['Alpha'])
+        try:
+            m.blend_method = 'CLIP' if settings.get('clip') else 'BLEND'
+            m.alpha_threshold = 0.4
+        except Exception:
+            m.blend_method = 'BLEND'
     if settings.get('emit'):
+        emit_col = settings.get('colour', col) or (1, 1, 1, 1)
         if 'Emission Color' in bsdf.inputs:
-            bsdf.inputs['Emission Color'].default_value = col if col else (1, 1, 1, 1)
+            bsdf.inputs['Emission Color'].default_value = emit_col
         if 'Emission Strength' in bsdf.inputs:
             bsdf.inputs['Emission Strength'].default_value = settings['emit']
     nt.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
     m['nfs_kind'] = 'car_material'
+    m['nfs_car_class'] = settings.get('_cls', '')
     return m
 
 
-def _part_material(part, texhash, slot, lib, paint, cache):
-    cls = _class_of(part, slot)
-    settings = CLASS_SHADERS.get(cls, dict(metallic=0.1, roughness=0.5))
-    tex = lib.lookup(texhash) if lib is not None else None
-    key = (texhash, cls, tuple(paint))
+def _part_material(part, texhash, cls_hash, lib, paint, cache):
+    cls = cars.CLASS_NAMES.get(cls_hash) if cls_hash else None
+    settings = dict(CLASS_SHADERS.get(cls, dict(metallic=0.1, roughness=0.5,
+                                                colour=(0.08, 0.08, 0.09, 1))))
+    settings['_cls'] = cls or 'part'
+    tex = lib.lookup(texhash) if (lib is not None and texhash) else None
+    key = (texhash if tex is not None else 0, cls, tuple(paint[:3]))
     if key in cache:
         return cache[key]
-    if tex is not None and cls not in ('CARSKIN',):
-        m = build_material(texhash, lib)
-        cache[key] = m
-        return m
-    # CARSKIN (optionally multiplied by a bound texture) or a class-only shader
-    name = 'car_%s_%08X_%02x%02x%02x' % (cls or 'part', texhash,
+    name = 'car_%s_%08X_%02x%02x%02x' % (cls or 'part', texhash if tex is not None else 0,
                                          int(paint[0] * 255), int(paint[1] * 255), int(paint[2] * 255))
-    m = _paint_material(name, paint, settings, tex if cls == 'CARSKIN' else None, lib)
+    # Glass / lights must not fall back to an opaque world texture (that is
+    # what made windows look like scratchy defroster / damage maps).
+    use_tex = tex is not None and cls not in cars.GLASS_CLASSES
+    if cls == 'DEFROSTER':
+        use_tex = tex is not None  # glass with optional detail
+    if cls == 'CARSKIN':
+        m = _paint_material(name, paint, settings, tex if tex is not None else None,
+                            lib, multiply_paint=bool(tex))
+    else:
+        m = _paint_material(name, settings.get('colour', paint), settings,
+                            tex if use_tex else None, lib, multiply_paint=False)
     cache[key] = m
     return m
 
 
-def _assign_class_materials(ob, part, lib, paint, cache):
-    """Rebuild the object's materials using car texture / class binding."""
-    me = ob.data
-    # rebuild from part.mesh material slots so we know the texture hash + class
-    slots_map = {}
-    new_mats = []
-    for i, (first, count, slot, rec) in enumerate(part.mesh.materials):
+def _build_car_mesh(part, lib, paint, cache):
+    """Mesh with one material per shader class (not grouped only by texture).
+
+    ``importer.build_mesh`` merges faces that share a texture hash, which
+    turns wheel rims into rubber when they reuse the tyre atlas.
+    """
+    o = _as_obj_dict(part)
+    me = bpy.data.meshes.new(part.name)
+    me.from_pydata(o['verts'], [], o['faces'])
+    me.uv_layers.new(name='UVMap')
+    me.color_attributes.new('prelight', 'BYTE_COLOR', 'CORNER')
+    loop_v = [0] * len(me.loops)
+    me.loops.foreach_get('vertex_index', loop_v)
+    uv, cl = [], []
+    for v in loop_v:
+        u, vv = o['uvs'][v] if v < len(o['uvs']) else (0.0, 0.0)
+        uv += (u, 1.0 - vv)
+        r, g, b, a = o['cols'][v] if v < len(o['cols']) else (255, 255, 255, 255)
+        cl += (r / 255, g / 255, b / 255, a / 255)
+    me.uv_layers['UVMap'].data.foreach_set('uv', uv)
+    me.color_attributes['prelight'].data.foreach_set('color_srgb', cl)
+
+    mats, face_mat = [], [0] * len(o['faces'])
+    for i, rec in enumerate(part.mesh.materials):
+        first, count, slot = rec[0], rec[1], rec[2]
         th = part.textures[slot] if slot < len(part.textures) else 0
-        if th not in slots_map:
-            slots_map[th] = len(new_mats)
-            new_mats.append(_part_material(part, th, slot, lib, paint, cache))
-    me.materials.clear()
-    for m in new_mats:
-        me.materials.append(m)
-    # face material indices already match tex-slot grouping from build_mesh;
-    # remap if the hash order differed. build_mesh used part['tex'] order.
-    # Safer to leave indices: build_mesh grouped by tex hash in encounter order
-    # which is the same as we just did.
+        cls_hash = cars.part_shader(part, i, slot)
+        mat = _part_material(part, th, cls_hash, lib, paint, cache)
+        if mat not in mats:
+            mats.append(mat)
+        mid = mats.index(mat)
+        start, n = first // 3, count // 3
+        for f in range(start, min(start + n, len(face_mat))):
+            face_mat[f] = mid
+    for mat in mats:
+        me.materials.append(mat)
+    for poly, fi in zip(me.polygons, face_mat):
+        poly.material_index = fi
+    me.validate()
+    me.update()
+    # game meshes are low-poly; smooth shading matches the in-game look
+    for poly in me.polygons:
+        poly.use_smooth = True
+    try:
+        me.use_auto_smooth = True
+        me.auto_smooth_angle = 0.698  # 40 degrees
+    except Exception:
+        pass
+    return me
+
+
+def _part_basis(part):
+    """Local transform for a part. Skip leftover L/R mirror flags."""
+    if cars.uses_baked_model_space(part.matrix, part.mesh.verts):
+        return Matrix.Identity(4)
+    return game_matrix(part.matrix) if part.matrix else Matrix.Identity(4)
 
 
 def import_car(path, kit='KIT00', lod='A', paint=DEFAULT_PAINT, location=(0.0, 0.0, 0.0),
@@ -187,19 +277,28 @@ def import_car(path, kit='KIT00', lod='A', paint=DEFAULT_PAINT, location=(0.0, 0
     skip = {p for p in (wheel, front_brake, rear_brake) if p is not None}
     # exhaust meshes are stored at the origin like wheels; hide them on a parked car
     skip.update(p for p in parts if 'EXHAUST' in p.family.upper())
-    for p in parts:
-        if p in skip:
-            continue
-        me = build_mesh(_as_obj_dict(p), p.name, {}, lib, None)
-        ob = bpy.data.objects.new(p.name, me)
-        ob.matrix_world = game_matrix(p.matrix) if p.matrix else Matrix.Identity(4)
-        ob['nfs_kind'] = 'car_part'
+
+    def _link_part(p, ob_name, loc=None, rot=None, kind='car_part'):
+        me = _build_car_mesh(p, lib, paint, cache)
+        ob = bpy.data.objects.new(ob_name, me)
+        collection.objects.link(ob)
+        ob.parent = root
+        ob.matrix_parent_inverse = Matrix.Identity(4)
+        if loc is not None:
+            ob.location = loc
+            ob.rotation_euler = rot or (0.0, 0.0, 0.0)
+        else:
+            ob.matrix_basis = _part_basis(p)
+        ob['nfs_kind'] = kind
         ob['nfs_car'] = car.name
         ob['nfs_hash'] = '%08X' % p.hash
         ob['nfs_part'] = p.family
-        collection.objects.link(ob)
-        ob.parent = root
-        _assign_class_materials(ob, p, lib, paint, cache)
+        return ob
+
+    for p in parts:
+        if p in skip:
+            continue
+        _link_part(p, p.name)
 
     if wheel is not None:
         layout = cars.wheel_layout(global_dir or cars.default_global_dir(folder), car.name)
@@ -208,34 +307,15 @@ def import_car(path, kit='KIT00', lod='A', paint=DEFAULT_PAINT, location=(0.0, 0
             layout = cars.estimate_wheel_layout(body, wheel)
             log('[nfsu2] wheel axles estimated from geometry')
         xforms = cars.wheel_transforms(wheel, layout)
-        me = build_mesh(_as_obj_dict(wheel), wheel.name, {}, lib, None)
         for i, (loc, rot) in enumerate(xforms):
-            ob = bpy.data.objects.new('%s.W%d' % (wheel.name, i), me)
-            ob.location = loc
-            ob.rotation_euler = rot
-            ob['nfs_kind'] = 'car_wheel'
-            ob['nfs_car'] = car.name
-            ob['nfs_hash'] = '%08X' % wheel.hash
+            ob = _link_part(wheel, '%s.W%d' % (wheel.name, i), loc, rot, kind='car_wheel')
             ob['nfs_wheel'] = i
-            collection.objects.link(ob)
-            ob.parent = root
-            _assign_class_materials(ob, wheel, lib, paint, cache)
         def _place_brakes(part, indices):
             if part is None:
                 return
-            me = build_mesh(_as_obj_dict(part), part.name, {}, lib, None)
             for i in indices:
                 loc, rot = xforms[i]
-                ob = bpy.data.objects.new('%s.W%d' % (part.name, i), me)
-                ob.location = loc
-                ob.rotation_euler = rot
-                ob['nfs_kind'] = 'car_part'
-                ob['nfs_car'] = car.name
-                ob['nfs_hash'] = '%08X' % part.hash
-                ob['nfs_part'] = part.family
-                collection.objects.link(ob)
-                ob.parent = root
-                _assign_class_materials(ob, part, lib, paint, cache)
+                _link_part(part, '%s.W%d' % (part.name, i), loc, rot)
         _place_brakes(front_brake, (0, 1))
         _place_brakes(rear_brake, (2, 3))
 

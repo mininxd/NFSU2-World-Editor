@@ -33,6 +33,20 @@ CLASS_CHROME = bin_hash('CHROME')            # 0x54949AFD
 CLASS_HEADLIGHTGLASS = bin_hash('HEADLIGHTGLASS')
 CLASS_CARBOTTOM = bin_hash('CARBOTTOM')      # 0xBD1F0E0A
 CLASS_BLACK = bin_hash('BLACK')
+CLASS_DULLPLASTIC = bin_hash('DULLPLASTIC')  # 0x0FEDEE40
+CLASS_BOTTOM = bin_hash('BOTTOM')            # 0x52BF4C34
+CLASS_DECAL = bin_hash('DECAL')              # 0x02A05578
+CLASS_ALUMINUM = bin_hash('ALUMINUM')        # 0x2E65E067
+CLASS_BRAKELIGHTGLASS = bin_hash('BRAKELIGHTGLASS')
+CLASS_BRAKELIGHT = bin_hash('BRAKELIGHT')    # 0x05BC3A3C
+CLASS_HEADLIGHT = bin_hash('HEADLIGHT')      # 0x9C645529
+CLASS_CARBONFIBRE = bin_hash('CARBONFIBRE')  # 0x721AFF7C
+# Hashes seen in shipped cars whose original name is not recovered yet.
+CLASS_TEXTURED = 0x010CB64A   # textured diffuse (rim faces, driver sprite)
+CLASS_TRIM = 0x12C9453C       # dark glossy trim / window surround
+CLASS_DEFROSTER = 0x3ED70C43  # rear-window defroster (glass + detail)
+CLASS_LIGHT_LODA = 0xF7FC7674 # extra brakelight/headlight shader
+CLASS_LIGHT_LODB = 0x33A26CB6
 
 CLASS_NAMES = {
     CLASS_CARSKIN: 'CARSKIN',
@@ -43,7 +57,25 @@ CLASS_NAMES = {
     CLASS_HEADLIGHTGLASS: 'HEADLIGHTGLASS',
     CLASS_CARBOTTOM: 'CARBOTTOM',
     CLASS_BLACK: 'BLACK',
+    CLASS_DULLPLASTIC: 'DULLPLASTIC',
+    CLASS_BOTTOM: 'BOTTOM',
+    CLASS_DECAL: 'DECAL',
+    CLASS_ALUMINUM: 'ALUMINUM',
+    CLASS_BRAKELIGHTGLASS: 'BRAKELIGHTGLASS',
+    CLASS_BRAKELIGHT: 'BRAKELIGHT',
+    CLASS_HEADLIGHT: 'HEADLIGHT',
+    CLASS_CARBONFIBRE: 'CARBONFIBRE',
+    CLASS_TEXTURED: 'TEXTURED',
+    CLASS_TRIM: 'TRIM',
+    CLASS_DEFROSTER: 'DEFROSTER',
+    CLASS_LIGHT_LODA: 'BRAKELIGHT',
+    CLASS_LIGHT_LODB: 'HEADLIGHT',
 }
+
+# Material classes that should render as transmissive / blended glass.
+GLASS_CLASSES = frozenset({
+    'WINDSHIELD', 'HEADLIGHTGLASS', 'BRAKELIGHTGLASS', 'DEFROSTER',
+})
 
 # Hidden on a parked/stock car (hood and trunk stay closed).
 HIDDEN_FAMILIES = (
@@ -111,6 +143,55 @@ def _kit_family(name):
 def _is_hidden(part):
     fam = part.family.upper()
     return any(h in fam for h in HIDDEN_FAMILIES)
+
+def part_shader(part, mat_index, slot):
+    """Material-class hash for one material record of ``part``.
+
+    ``0x00134013`` is usually one class per texture slot, but when a single
+    texture is used with several shaders (stock wheels, headlights) the list
+    is one class per material record instead.
+    """
+    classes = getattr(part, 'classes', None) or []
+    if not classes:
+        return None
+    textures = getattr(part, 'textures', None) or []
+    mats = []
+    mesh = getattr(part, 'mesh', None)
+    if mesh is not None:
+        mats = getattr(mesh, 'materials', None) or []
+    ncls, ntex, nmat = len(classes), len(textures), len(mats) or len(classes)
+    if ncls == nmat and ncls != ntex:
+        return classes[mat_index] if mat_index < ncls else classes[-1]
+    if slot is not None and 0 <= slot < ncls:
+        return classes[slot]
+    if 0 <= mat_index < ncls:
+        return classes[mat_index]
+    return classes[-1]
+
+
+def uses_baked_model_space(matrix, verts):
+    """True when verts are already in car space and ``matrix`` is only a
+    leftover mirror/rotation flag (typical of paired L/R parts).
+
+    Applying those matrices a second time folds right-side parts onto the
+    left and hides headlights, doors and mirrors.
+    """
+    if not matrix:
+        return True
+    m = list(matrix)
+    ident = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+    if len(m) >= 16 and all(abs(a - b) < 1e-4 for a, b in zip(m[:16], ident)):
+        return True
+    # translation in row-major slot 12..14
+    if len(m) >= 15 and (abs(m[12]) + abs(m[13]) + abs(m[14])) > 1e-3:
+        return False
+    if not verts:
+        return False
+    xs, ys, zs = zip(*verts)
+    cx, cy, cz = (min(xs) + max(xs)) * 0.5, (min(ys) + max(ys)) * 0.5, (min(zs) + max(zs)) * 0.5
+    return max(abs(cx), abs(cy), abs(cz)) > 0.2
+
+
 
 
 class CarGeometry:
@@ -273,10 +354,11 @@ def estimate_wheel_layout(body_part, wheel_part):
 def wheel_transforms(wheel_part, layout):
     """World-space (location, euler_xyz radians) for each of the 4 wheels.
 
-    The stock wheel mesh sits in the Y-up-outward, XZ rolling plane, with its
-    inner face near y=0. +Y (right) wheels are unrotated; -Y (left) wheels are
-    rotated 180° about Z so the outer face points left. Z is set so the tyre
-    touches z=0.
+    The stock wheel mesh is a disc in the XZ (rolling) plane. The rim cap
+    sits at y ≈ 0 and the tyre width extends toward +Y, so the outward
+    normal of the rim points toward -Y. Wheels on the -Y (right) side are
+    left unrotated; wheels on the +Y (left) side are rotated 180° about Z
+    so the rim faces outward. Z is set so the tyre sits on z=0.
     """
     import math
     x0, y0, z0, x1, y1, z1 = wheel_part.bbox()
@@ -284,14 +366,21 @@ def wheel_transforms(wheel_part, layout):
     z_center = 0.5 * (z0 + z1)
     out = []
     for w in layout:
-        # sit on the ground: bottom of the mesh at z=0, or use authored radius
-        z = (w['radius'] - (z1 - z_center)) if w.get('radius') else -z0
-        if w['y'] >= 0:
-            loc = (w['x'], w['y'] - y_center, z)
-            rot = (0.0, 0.0, 0.0)
+        # Origin is the wheel centre (z_center ~ 0). Place that centre at
+        # the authored radius so the tyre sits on z=0. (Using
+        # radius - (z1 - z_center) would leave the centre near 0 and bury
+        # the mesh halfway in the ground.)
+        if w.get('radius'):
+            z = w['radius'] - z_center
         else:
+            z = -z0
+        if w['y'] >= 0:
+            # left side: flip so the rim cap (y≈0, normal -Y) faces +Y
             loc = (w['x'], w['y'] + y_center, z)
             rot = (0.0, 0.0, math.pi)
+        else:
+            loc = (w['x'], w['y'] - y_center, z)
+            rot = (0.0, 0.0, 0.0)
         out.append((loc, rot))
     return out
 
