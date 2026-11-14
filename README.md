@@ -122,6 +122,25 @@ python tools/build_road_mod.py --tracks "/path/to/TRACKS" --plan plan.json --out
 ```
 The plan keys are documented in `nfsu2_world_editor/core/road_mod.py`. The output goes to `OUTDIR`; the originals are never touched.
 
+`tools/build_highway_mod.py` is the second version (4-lane highway, natural island with
+copied Bayview buildings, trees and street lights). It respects the game's streaming limits:
+
+- no load list (visible list) is changed; the road is split over host sections the game
+  already loads in the areas it passes (default `B25,C25,E21`);
+- every load list must stay under `--budget` bytes (default 6.5 MB; the largest shipped
+  Bayview list is 6.85 MB — going over it gives an empty world in game);
+- no section grows past the largest shipped one, and drivable boundaries keep at most
+  17 points (the shipped maximum).
+
+```
+python tools/build_highway_mod.py --tracks "/path/to/TRACKS" --plan plan2.json --out OUTDIR
+```
+
+Plan keys (in addition to `center`/`stations`/`junctions`): `land` (per point: on the island),
+`island_coast` (polygon), `island_z`, `trim` (m of road mesh left out at each end where it
+overlaps the existing junction road), `median_end`, `open_ends`. Use `--minimal` for a
+diagnostic build without island and without visibility changes (plus a marker pillar).
+
 ## Development
 ```
 python -m pip install pytest numpy   # numpy optional: tests cover both code paths

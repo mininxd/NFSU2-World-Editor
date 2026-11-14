@@ -243,6 +243,240 @@ def _signed_area(pts):
                for i in range(len(pts))) / 2
 
 
+# ------------------------------------------------------- budgeted boundaries
+
+MAX_BOUNDARY_POINTS = 17      # largest drivable boundary in the shipped L4R*.BUN files
+
+
+def list_bytes(vm, sizes, section):
+    """Bytes of streaming data the visible list of drivable ``section`` loads."""
+    return sum(sizes.get(s, 0) for s in vm.visible_list(section).sections)
+
+
+def fit_boundaries(vm, corridor_pts, half, allowed, areas=(), margin=10.0,
+                   max_points=MAX_BOUNDARY_POINTS, log=print, owner=None):
+    """Grow drivable boundaries over a new road, within the shipped limits.
+
+    Every road point (and every extra ``areas`` polygon, e.g. an island) must
+    end up inside a boundary from ``allowed``. Points already inside some other
+    live boundary must lie in an allowed one too. Each grown boundary keeps all
+    of its original area and vertices, gets no more than ``max_points``
+    vertices (shipped maximum 17), and doesn't overlap the other live
+    boundaries.
+
+    Returns ``(users, changed)``: the drivable sections covering the road, and
+    the boundaries that were rewritten. Raises ``ValueError`` when a constraint
+    can't be met. Needs shapely.
+    """
+    from shapely.geometry import LineString, Polygon, Point
+    from shapely.ops import unary_union, nearest_points
+    allowed = set(allowed)
+    live = {v.section for v in vm.visible}
+    orig = {b.section: Polygon(b.points).buffer(0) for b in vm.boundaries if b.section in live}
+    # 1. owner per road point
+    given = owner
+    owner = []
+    for p in ([] if given else corridor_pts):
+        inside = [s for s, P in orig.items() if P.contains(Point(p))]
+        bad = [s for s in inside if s not in allowed]
+        if bad:
+            raise ValueError('road point %s lies in drivable section(s) %s that cannot take the road' % (p, bad))
+        if inside:
+            owner.append(inside[0])
+        else:
+            owner.append(min(allowed, key=lambda s: orig[s].distance(Point(p))))
+    if given:
+        owner = list(given)
+    # merge very short runs into their neighbour (fewer bumps)
+    runs = []
+    for i, o in enumerate(owner):
+        if runs and runs[-1][0] == o:
+            runs[-1][2] = i
+        else:
+            runs.append([o, i, i])
+    changed_any = not given
+    while changed_any and len(runs) > 1:
+        changed_any = False
+        for k, (o, a, b) in enumerate(runs):
+            if b - a < 12:
+                nb = runs[k - 1] if k else runs[k + 1]
+                if k and k + 1 < len(runs):
+                    nb = min((runs[k - 1], runs[k + 1]),
+                             key=lambda r: orig[r[0]].distance(LineString(corridor_pts[a:b + 2]) if b > a
+                                                                else Point(corridor_pts[a])))
+                runs[k][0] = nb[0]
+                merged = []
+                for r in runs:
+                    if merged and merged[-1][0] == r[0]:
+                        merged[-1][2] = r[2]
+                    else:
+                        merged.append(list(r))
+                runs = merged
+                changed_any = True
+                break
+    want = {}
+    for o, a, b in runs:
+        if all(orig[o].contains(Point(p)) for p in corridor_pts[a:b + 1]):
+            continue
+        want.setdefault(o, []).append(corridor_pts[max(0, a - 1):b + 2])
+    # extra areas (e.g. an island) are split between the road's owners: each
+    # part goes to the owner of the nearest road point
+    area_of = {}
+    run_owner = [r[0] for r in runs for _ in range(r[2] - r[1] + 1)]
+    for area in areas:
+        A = Polygon(area).buffer(0)
+        minx, miny, maxx, maxy = A.bounds
+        cells = {}
+        g = 8.0
+        y = miny
+        while y < maxy:
+            x = minx
+            while x < maxx:
+                c = Point(x + g / 2, y + g / 2)
+                if A.buffer(g).contains(c):
+                    k = min(range(len(corridor_pts)), key=lambda i: (corridor_pts[i][0] - c.x) ** 2
+                            + (corridor_pts[i][1] - c.y) ** 2)
+                    cells.setdefault(run_owner[k], []).append(Polygon([(x, y), (x + g, y), (x + g, y + g), (x, y + g)]))
+                x += g
+            y += g
+        for o, sq in cells.items():
+            piece = unary_union(sq).buffer(0.01).intersection(A)
+            for g_ in getattr(piece, 'geoms', [piece]):
+                if g_.area > 50:
+                    area_of.setdefault(o, []).append(g_.simplify(2.0))
+    owners = [r[0] for r in runs for _ in range(r[2] - r[1] + 1)]
+    polys = dict(orig)
+    changed = set()
+    for sec in sorted(set(want) | set(area_of)):
+        O = orig[sec]
+        need = []
+        pieces = [O]
+        for run in want.get(sec, []):
+            line = LineString(run) if len(run) > 1 else Point(run[0])
+            band = line.buffer(half + margin, cap_style=2 if len(run) > 1 else 1)
+            pieces.append(band)
+            need.append(line.buffer(half + 1.0, cap_style=2 if len(run) > 1 else 1))
+        for A in area_of.get(sec, []):
+            pieces.append(A.buffer(2.0))
+            need.append(A)
+        U = unary_union(pieces)
+        if U.geom_type != 'Polygon':
+            parts = list(U.geoms)
+            main = max(parts, key=lambda g: g.intersection(O).area)
+            for g in parts:
+                if g is not main:
+                    a, b = nearest_points(g, main)
+                    main = unary_union([main, g, LineString([a, b]).buffer(half + margin)])
+            U = main
+        others = [P for s, P in polys.items() if s != sec]
+        oth = unary_union(others)
+        U = U.difference(oth).union(O)
+        if U.geom_type != 'Polygon':
+            U = max(U.geoms, key=lambda g: g.intersection(O).area)
+        U = Polygon(U.exterior).simplify(0.5, preserve_topology=True)
+        need_u = unary_union(need).difference(oth)   # parts inside other boundaries are covered there
+        P = _simplify_with_budget(U, O, need_u, oth, max_points)
+        if P is None:
+            raise ValueError('drivable section %d: cannot cover its road part with <= %d boundary points'
+                             % (sec, max_points))
+        polys[sec] = P
+        changed.add(sec)
+        log('boundary %d: %d -> %d points' % (sec, len(O.exterior.coords) - 1, len(P.exterior.coords) - 1))
+    # write back, original orientation kept
+    for sec in changed:
+        b = vm.boundary(sec)
+        orig_ccw = _signed_area(b.points) > 0
+        pts = list(polys[sec].exterior.coords)[:-1]
+        if (_signed_area(pts) > 0) != orig_ccw:
+            pts = pts[::-1]
+        b.points = [(float(x), float(y)) for x, y in pts]
+    users = set()
+    for p in corridor_pts:
+        hit = vm.drivable_at(*p)
+        if not hit:
+            raise ValueError('road point %s is outside every drivable boundary' % (p,))
+        if any(s not in allowed for s in hit):
+            raise ValueError('road point %s lies in section(s) %s' % (p, hit))
+        users.update(hit)
+    return users, changed
+
+
+def _simplify_with_budget(U, O, need, others, max_points, overlap_tol=25.0):
+    """Remove vertices of ``U`` (smallest triangle first) until it has at most
+    ``max_points``, keeping: a valid simple polygon, all of ``O`` (the
+    original boundary) and ``need`` covered, overlap with ``others`` at most
+    ``overlap_tol`` square units. Returns the polygon or None."""
+    from shapely.geometry import Polygon
+    pts = list(U.exterior.coords)[:-1]
+    o_pts = list(O.exterior.coords)[:-1]
+    P0 = Polygon(pts)
+    tol_o = O.difference(P0).area + 1.0 if P0.is_valid else 1.0
+    tol_n = need.difference(P0).area + 1.0 if P0.is_valid else 1.0
+    tol_x = max(overlap_tol, P0.intersection(others).area + 1.0) if P0.is_valid else overlap_tol
+
+    def ok(cand):
+        if len(cand) < 3:
+            return False
+        P = Polygon(cand)
+        if not P.is_valid:
+            return False
+        if O.difference(P).area > tol_o:
+            return False
+        if need.difference(P).area > tol_n:
+            return False
+        if P.intersection(others).area > tol_x:
+            return False
+        return True
+
+    def tri(i, cur):
+        a, b, c = cur[i - 1], cur[i], cur[(i + 1) % len(cur)]
+        return abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2
+
+    cur = pts
+    if not ok(cur):
+        # the union itself may overlap others by a sliver; accept as the start
+        pass
+    while len(cur) > max_points:
+        order = sorted(range(len(cur)), key=lambda i: tri(i, cur))
+        for i in order:
+            cand = cur[:i] + cur[i + 1:]
+            if ok(cand):
+                cur = cand
+                break
+        else:
+            return _hull_bump(U, O, need, others, max_points, ok)
+    return Polygon(cur) if ok(cur) else None
+
+
+def _hull_bump(U, O, need, others, max_points, ok):
+    """Fallback: original vertices plus a convex bump over ``need``, inserted
+    at the original edge nearest to it."""
+    from shapely.geometry import Polygon, MultiPoint
+    o = list(O.exterior.coords)[:-1]
+    free = max_points - len(o)
+    if free < 3:
+        return None
+    hull = need.convex_hull
+    for tol in (2.0, 5.0, 10.0, 20.0, 40.0):
+        h = hull.buffer(tol, join_style=2).simplify(tol, preserve_topology=False)
+        hp = list(h.exterior.coords)[:-1]
+        if len(hp) > free + 2:
+            continue
+        for e in range(len(o)):
+            a, b = o[e], o[(e + 1) % len(o)]
+            # visit hull points in the angular order seen from the edge midpoint
+            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+            import math
+            ang = sorted(hp, key=lambda p: math.atan2(p[1] - my, p[0] - mx))
+            for seq in (ang, ang[::-1]):
+                for k in range(len(seq)):
+                    rot = seq[k:] + seq[:k]
+                    cand = o[:e + 1] + rot + o[e + 1:]
+                    if len(cand) <= max_points and ok(cand):
+                        return Polygon(cand)
+    return None
+
+
 # ------------------------------------------------------------------ main
 
 def build_road_mod(tracks, plan, out_dir, host='E21', region_name='L4RA', log=print, assign=None):

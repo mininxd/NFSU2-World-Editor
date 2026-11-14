@@ -13,7 +13,7 @@ class TextureLibrary:
     """Texture lookup for a :class:`core.stream.Region`. A section's own packs
     win over the region-wide library packs."""
 
-    def __init__(self, region):
+    def __init__(self, region, extra_files=(), log=None):
         self.region = region
         self.by_hash = {}
         self.by_section = {}
@@ -22,6 +22,32 @@ class TextureLibrary:
                 self.by_hash.setdefault(t.hash, t)
                 self.by_section.setdefault(tag, {}).setdefault(t.hash, t)
         self.images = {}
+        self.extra_count = 0
+        for path in extra_files:
+            self.add_file(path, log)
+
+    def add_file(self, path, log=None):
+        """Add the texture packs of another BUN/BIN (e.g. the game's GLOBAL
+        packs) as a fallback: textures already known keep their region copy.
+        Files without (or with unreadable) packs are skipped."""
+        from ..core import bchunk, tpk
+        from ..core.files import read_bytes
+        try:
+            packs = list(tpk.iter_packs(bchunk.parse(read_bytes(path))))
+        except Exception as e:  # compressed or non-chunk file
+            if log:
+                log('[textures] skipped %s (%s)' % (path, type(e).__name__))
+            return 0
+        n = 0
+        for p in packs:
+            for t in p.textures:
+                if t.hash not in self.by_hash:
+                    self.by_hash[t.hash] = t
+                    n += 1
+        self.extra_count += n
+        if log and n:
+            log('[textures] %s: %d extra textures' % (path, n))
+        return n
 
     def lookup(self, h, section=None):
         if section is not None:

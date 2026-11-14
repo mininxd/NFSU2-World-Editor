@@ -77,8 +77,18 @@ def _key(h, m):
     return (h, tuple(round(x, 2) for x in m))
 
 
+def global_texture_files(tracks_dir, global_dir=None):
+    """BUN/BIN files of the game's GLOBAL folder (sibling of TRACKS unless given)."""
+    from pathlib import Path
+    d = Path(global_dir) if global_dir else Path(tracks_dir).parent / 'GLOBAL'
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in ('.bun', '.bin'))
+
+
 def import_world(tracks, region='L4RA', sections=('C21',), instances=True, context=None,
-                 log=print, textures=True, skip_panoramas=False, collision=False):
+                 log=print, textures=True, skip_panoramas=False, collision=False,
+                 global_dir=None):
     """Import ``sections`` of ``region`` from the TRACKS folder into the current scene.
 
     An empty ``sections`` list (or ``'all'``) imports every section of the region.
@@ -86,6 +96,9 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
     ``SKYDOME*``), which otherwise surround the map with huge far geometry.
     ``collision`` adds a read-only ``COLLISION_<tag>`` mesh per section (ground
     faces, barrier walls drawn 3 m tall) for checking where cars can drive.
+    ``global_dir`` (default: a ``GLOBAL`` folder next to TRACKS, if any) adds the
+    game's shared texture packs (GLOBALB.BUN, InGameCommon.bun, ...) for
+    textures the region itself does not carry.
     Returns ``{tag: (solids, triangles, scenery_instances)}``. Raises
     FileNotFoundError / KeyError with a readable message on bad input.
     """
@@ -102,7 +115,11 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
             ', '.join(unknown), l4_path.name, ', '.join(sorted(table)[:12])))
     reg = Region(read_bytes(stream_path), read_bytes(l4_path), region.upper())
     sbuf = reg.src
-    lib = TextureLibrary(reg) if textures else None
+    lib = None
+    if textures:
+        lib = TextureLibrary(reg)
+        for f in global_texture_files(tracks_dir, global_dir):
+            lib.add_file(f, log)
     scene = context.scene
     cache = {}
     stats = {}

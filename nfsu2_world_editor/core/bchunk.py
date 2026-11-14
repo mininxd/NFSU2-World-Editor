@@ -161,6 +161,11 @@ def _write(c, pos, out, rel):
         n = len(c.data)
         if c.pad_target is not None and (c.offset != pos or c.dirty):
             n = (c.pad_target - (pos + 8)) % c.pad_mod
+            if c.offset is not None and c.size is not None and rel == 0:
+                # keep the next chunk at its original offset when the padding can absorb the shift
+                m = c.offset + 8 + c.size - (pos + 8)
+                if m >= 0 and (m - n) % c.pad_mod == 0:
+                    n = m
             out += bytes(n) if n != len(c.data) or any(c.data) else c.data
         else:
             out += c.data
