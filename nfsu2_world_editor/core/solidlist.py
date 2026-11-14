@@ -45,7 +45,17 @@ def add_object(region, tag, name, template=None):
         raise ValueError('section %s has no 24-byte-stride object to use as a template' % tag)
     new = clone_object(template)
     set_name(new, name, h)
-    sl.children.append(new)
+    # the shipped lists keep their objects sorted by hash, in the same order
+    # as the (hash, pointer) index the game fills while loading
+    at = len(sl.children)
+    for i, o in enumerate(sl.children):
+        if o.id == SOLID_OBJECT and o.find(SOLID_HEADER) is not None and object_hash(o) > h:
+            at = i
+            break
+    # a zero chunk directly in front of the object we insert before stays with it
+    if at < len(sl.children) and at > 0 and sl.children[at - 1].id == 0:
+        at -= 1
+    sl.children.insert(at, new)
     sl.dirty = True
     hdr = sl.find(SOLID_LIST_HEADER)
     if hdr is not None:

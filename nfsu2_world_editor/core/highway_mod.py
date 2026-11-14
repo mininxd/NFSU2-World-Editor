@@ -316,7 +316,17 @@ def build_highway_mod(tracks, plan, out_dir, region_name='L4RA', hosts=HOSTS, bu
                 users=sorted(users), budget=report, opened=opened)
 
 
+def check_layout(stream, l4, region_name='L4RA'):
+    """Raise if any section breaks a layout rule of the shipped files that the
+    game depends on (see :mod:`layout`)."""
+    from .layout import section_violations
+    bad = section_violations(stream, Region(stream, l4, region_name).entries)
+    if bad:
+        raise RuntimeError('layout check failed: %s' % {k: v[:3] for k, v in bad.items()})
+
+
 def _write(out_dir, region_name, region, stream, l4, write):
+    check_layout(stream, l4, region_name)
     if not write:
         return
     import os

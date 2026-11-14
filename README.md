@@ -25,7 +25,7 @@ All collision packs (255 in L4RA), the L4RA visibility manager and all 226 `Rout
 
 > ⚠️ **Collision of edited shipped objects isn't rebuilt.** New objects get collision, but if you raise or move a shipped road, cars still drive on its old surface. Also, none of the new-object, collision or road-builder output has been tested in game yet.
 
-Other limitations: textures can't be resized or added yet (same size and format only). New areas don't appear on the minimap or GPS (the road graph isn't extended). Textures from `GLOBAL\*.BUN` (a few effect sprites) aren't loaded. The game, not this tool, decides whether it accepts an edit, so keep backups and test in game.
+Other limitations: textures can't be resized or added yet (same size and format only). New areas don't appear on the minimap or GPS (the road graph isn't extended). The game, not this tool, decides whether it accepts an edit, so keep backups and test in game.
 
 ## Requirements
 - Blender **4.2 or newer**
@@ -58,7 +58,7 @@ Other limitations: textures can't be resized or added yet (same size and format 
 | Show Collision | Add a wireframe `COLLISION_<tag>` mesh per section (grey = road, green = grass, red = walls); it's read-only and never exported |
 | Clear Scene First | Delete existing objects before importing |
 
-Each object keeps `nfs_*` custom properties (section, hash, file offset, and a checksum) that the exporter uses. The game uses Z-up, and coordinates are kept 1:1. To see textures in the viewport, switch Solid shading to **Texture** colour, or use Material Preview.
+Each object keeps `nfs_*` custom properties (section, hash, file offset, and a checksum) that the exporter uses. The game uses Z-up, and coordinates are kept 1:1. To see textures in the viewport, switch Solid shading to **Texture** colour, or use Material Preview. Textures a region doesn't carry itself (lights, signs, effect sprites) are looked up in the game's shared packs in the `GLOBAL` folder next to `TRACKS` (`GLOBALB.BUN`, `InGameCommon.bun`, ...); the headless importer takes `--global-dir` if that folder lives elsewhere.
 
 ### Round-trip workflow (edit → game)
 1. **Import** the sections you want to edit (File > Import > NFSU2 World).
@@ -127,10 +127,15 @@ copied Bayview buildings, trees and street lights). It respects the game's strea
 
 - no load list (visible list) is changed; the road is split over host sections the game
   already loads in the areas it passes (default `B25,C25,E21`);
-- every load list must stay under `--budget` bytes (default 6.5 MB; the largest shipped
-  Bayview list is 6.85 MB — going over it gives an empty world in game);
+- every load list stays under `--budget` bytes (default 6.5 MB, below the largest shipped
+  Bayview list of 6.85 MB; a conservative choice — the 1.2 executable reserves a
+  60 000 KB track streaming pool, 36 000 KB for L4RG, 43 000 KB in split screen);
 - no section grows past the largest shipped one, and drivable boundaries keep at most
-  17 points (the shipped maximum).
+  17 points (the shipped maximum);
+- the output must pass `core/layout.py`, the layout rules every shipped stream follows
+  and the game's loaders rely on: top-level packs on 128 bytes, 192-byte solid object
+  headers, objects sorted by hash, and exactly the 0x11 filler the loaders skip when
+  they round a payload address up to 16 bytes. The build stops if any rule is broken.
 
 ```
 python tools/build_highway_mod.py --tracks "/path/to/TRACKS" --plan plan2.json --out OUTDIR

@@ -36,6 +36,8 @@ MESH_INDICES = 0x00134B03
 MATERIAL_SIZE = 60
 BOUNDS_PAD = 0.01
 MAX_VERTS = 65535
+NAME_OFFSET = 0xA4
+NAME_LEN = 28              # header name field (0xA4..0xC0); header payload is 192 bytes
 
 
 def _f32(x):
@@ -225,11 +227,13 @@ def set_name(obj, name, model_hash=None):
     """Rename an object (header name + hash; default hash = bin_hash(name))."""
     from .tpk import bin_hash
     h = obj.find(SOLID_HEADER)
-    hd = bytearray(h.data[:0xA4])
+    if len(name) > NAME_LEN - 1:
+        raise ValueError('object name %r is longer than %d characters' % (name, NAME_LEN - 1))
+    hd = bytearray(h.data[:NAME_OFFSET])
     struct.pack_into('<I', hd, 0x10, bin_hash(name) if model_hash is None else model_hash)
-    raw = name.encode('ascii') + b'\0'
-    raw += b'\0' * ((-len(raw)) % 4)
-    _set(h, bytes(hd) + raw)
+    # the shipped header is always 192 bytes: the name sits in a fixed 28-byte field
+    raw = name.encode('ascii').ljust(NAME_LEN, b'\0')
+    _set(h, bytes(hd) + raw + bytes(h.data[NAME_OFFSET + NAME_LEN:]))
     obj.dirty = True
 
 

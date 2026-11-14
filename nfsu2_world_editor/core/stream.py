@@ -17,6 +17,21 @@ from .files import region_paths, read_bytes
 from .world import SECTION_TABLE, SECTION_ENTRY_SIZE
 
 SECTION_ALIGN = 2048
+# Top-level chunks the shipped streams always start on a fixed boundary
+# (measured on every chunk of STREAML4RA): id -> (modulus, residue) of the
+# chunk header's file offset. The game reads these packs in place, so an edit
+# that shrinks or grows an earlier chunk must not shift them off it; the
+# writer inserts a zero chunk in front when needed.
+TOP_ALIGN = {
+    0x80034100: (128, 0),   # scenery pack
+    0xB3300000: (128, 0),   # texture pack
+    0x80034130: (128, 0),   # collision pack
+    0x80135000: (128, 0),
+    0x00034027: (128, 0),
+    0x80135100: (16, 0),
+    0x80036000: (16, 0),
+    0x00035020: (16, 0),
+}
 
 
 def _table_location(l4):
@@ -95,6 +110,11 @@ class Region:
                     and nxt is not None and nxt.offset is not None):
                 self._write_section_pad(c, nxt.offset, out)
             else:
+                al = TOP_ALIGN.get(c.id)
+                if al and len(out) % al[0] != al[1]:
+                    m, r = al
+                    n = ((r - len(out)) % m - 8) % m
+                    out += struct.pack('<II', 0, n) + bytes(n)
                 bchunk._write(c, len(out), out, 0)
         newpos[len(self.src)] = len(out)
 

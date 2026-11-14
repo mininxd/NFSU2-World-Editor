@@ -135,7 +135,10 @@ def test_add_object_registers_in_solid_list():
     out_s, out_l4 = r.build()
     e = {x['tag']: x for x in section_table(bytes(out_l4))}['C3']
     names = [o['name'] for o in section_objects(bytes(out_s), e['offset'], e['size'])]
-    assert names[-1] == 'NFS_NEW_ROAD' and len(names) == 3
+    assert 'NFS_NEW_ROAD' in names and len(names) == 3
+    # objects stay sorted by hash like the shipped lists
+    from nfsu2_world_editor.core.tpk import bin_hash
+    assert [bin_hash(n) for n in names] == sorted(bin_hash(n) for n in names)
     r2 = Region(bytes(out_s), bytes(out_l4))
     sl = [c for c in r2.section_chunks('C3') if c.id == solidlist.SOLID_LIST][0]
     hdr = sl.find(solidlist.SOLID_LIST_HEADER)
