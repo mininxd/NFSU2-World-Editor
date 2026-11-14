@@ -20,3 +20,7 @@ refs/
 .venv/
 __pycache__/
 *.pyc
+dist/
+.pytest_cache/
+*.png
+*.json
