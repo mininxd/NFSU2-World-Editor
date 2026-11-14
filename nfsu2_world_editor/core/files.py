@@ -12,18 +12,22 @@ _REGION_RE = re.compile(r'^(?:STREAM)?(L\d+R[A-Z0-9])\.BUN$', re.IGNORECASE)
 
 
 def find_file(folder, name):
-    """Return the Path of ``name`` inside ``folder`` ignoring case, or None."""
+    """Return the Path of ``name`` inside ``folder`` ignoring case, or None.
+
+    The returned Path always uses the on-disk spelling (also on case-insensitive
+    file systems such as NTFS), preferring an exact-case match.
+    """
     folder = Path(folder)
-    exact = folder / name
-    if exact.is_file():
-        return exact
     if not folder.is_dir():
         return None
     want = name.casefold()
+    match = None
     for entry in os.scandir(folder):
         if entry.name.casefold() == want and entry.is_file():
-            return Path(entry.path)
-    return None
+            if entry.name == name:
+                return Path(entry.path)
+            match = match or Path(entry.path)
+    return match
 
 
 def _find_dir(folder, name):
