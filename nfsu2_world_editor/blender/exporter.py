@@ -8,24 +8,31 @@ For every ``SECTION_<tag>`` collection created by the importer:
 * new mesh objects linked directly in the collection are added to the
   section's first solid list as new SolidObjects (world-space vertices,
   identity matrix);
+* new objects also get a placement in the section's own scenery pack (the game
+  only draws what scenery places) and, unless ``nfs_collision`` is 0, ground
+  collision from their upward faces (surface id from ``nfs_surface``, default
+  1 = road; optionally barrier walls from steep faces);
+* scenery instances (``nfs_kind == 'scenery_instance'``) that were moved,
+  rotated or uniformly scaled are written back (translation, rotation, bounds;
+  the bounding-volume tree is rebuilt);
 * everything else keeps its original bytes.
 
 The source files are read from the TRACKS folder the section was imported
 from; the result goes to a different folder (``STREAM<region>.BUN`` +
-``<region>.BUN``). Collision (``0x80034130``) is NOT rebuilt yet: edited
-geometry looks right in game but cars still drive on the old surface.
+``<region>.BUN``). Collision of *edited* shipped objects is not rebuilt: the
+old surface stays where it was.
 """
 import os
 
 import bpy
 from mathutils import Matrix
 
-from ..core import meshcodec
+from ..core import meshcodec, world_edit as WE
 from ..core.meshcodec import MeshData, SOLID_OBJECT
 from ..core.solidlist import add_object
 from ..core.stream import Region
 from ..core.tpk import bin_hash
-from .importer import game_matrix, mesh_signature
+from .importer import game_matrix, mesh_signature, instance_moved
 
 DEFAULT_ARGB = 0xFF808080   # neutral prelight (x2 modulation = unlit texture)
 
@@ -143,7 +150,13 @@ def section_collections(scene):
             and c.name.startswith('SECTION_') and scene.user_of_id(c)]
 
 
-def export_world(out_dir, context=None, tracks=None, region=None, log=print):
+def _to_game(mat):
+    """Blender column-vector Matrix -> row-major game matrix (16 floats)."""
+    return tuple(x for row in mat.transposed() for x in row)
+
+
+def export_world(out_dir, context=None, tracks=None, region=None, log=print, place_scenery=True,
+                 rebuild_collision=True, collision_walls=False, move_instances=True):
     """Export every edited section in the scene. Returns a stats dict."""
     context = context or bpy.context
     scene = context.scene
@@ -160,7 +173,9 @@ def export_world(out_dir, context=None, tracks=None, region=None, log=print):
         raise RuntimeError('refusing to overwrite the original game files; pick another folder')
     nodes = _object_nodes(reg)
     dg = context.evaluated_depsgraph_get()
-    stats = dict(edited=0, added=0, unchanged=0, sections=set())
+    stats = dict(edited=0, added=0, unchanged=0, moved=0, collision_polys=0, sections=set())
+    packs = {}      # id(node) -> SceneryPack touched
+    new_coll = {}   # tag -> [polygons]
     for coll in colls:
         tag = coll['nfs_section']
         for ob in coll.all_objects:
@@ -194,11 +209,54 @@ def export_world(out_dir, context=None, tracks=None, region=None, log=print):
             stats['added'] += 1
             stats['sections'].add(tag)
             log('[nfsu2] %s: added new object %s (%d verts, %d tris)' % (tag, name, len(m.verts), len(m.indices) // 3))
+            if place_scenery and m.verts:
+                sp = WE.own_scenery_pack(reg, tag)
+                if sp is None:
+                    log('[nfsu2] %s: no scenery pack of its own; %s will not be drawn' % (tag, name))
+                else:
+                    sp = packs.setdefault(id(sp.node), sp)
+                    WE.place_world_model(sp, WE.trn_template(sp), name, m.hash, m.verts, len(m.indices) // 3)
+            if rebuild_collision and int(ob.get('nfs_collision', 1)):
+                tris = [tuple(m.verts[m.indices[i + k]] for k in range(3)) for i in range(0, len(m.indices) - 2, 3)]
+                polys = WE.ground_from_triangles(tris, surface=int(ob.get('nfs_surface', 1)), walls=collision_walls)
+                new_coll.setdefault(tag, []).extend(polys)
+        if move_instances:
+            for ob in coll.all_objects:
+                if ob.get('nfs_kind') != 'scenery_instance' or not instance_moved(ob):
+                    continue
+                sp, i = WE.find_instance(reg, tag, int(ob['nfs_record_offset']))
+                if sp is None:
+                    log('[nfsu2] %s: scenery record of %s not found, skipped' % (tag, ob.name))
+                    continue
+                sp = packs.setdefault(id(sp.node), sp)
+                lo = tuple(min(c[k] for c in ob.bound_box) for k in range(3))
+                hi = tuple(max(c[k] for c in ob.bound_box) for k in range(3))
+                try:
+                    WE.set_instance_transform(sp, i, _to_game(ob.matrix_world), (lo, hi))
+                except ValueError as ex:
+                    log('[nfsu2] %s: %s (%s), skipped' % (tag, ob.name, ex))
+                    continue
+                stats['moved'] += 1
+                stats['sections'].add(tag)
+    for sp in packs.values():
+        sp.commit()
+        if not sp.validate():
+            raise RuntimeError('scenery tree of section %d failed its check' % sp.section)
+    for tag, polys in new_coll.items():
+        if not polys:
+            continue
+        try:
+            WE.add_collision(reg, tag, polys)
+        except ValueError as ex:
+            log('[nfsu2] %s: collision not added (%s)' % (tag, ex))
+            continue
+        stats['collision_polys'] += len(polys)
+        log('[nfsu2] %s: +%d collision polygons' % (tag, len(polys)))
     sp, lp = reg.write(out_dir)
     stats['stream'], stats['l4'] = sp, lp
     stats['sections'] = sorted(stats['sections'])
-    log('[nfsu2] export: %d edited, %d added, %d unchanged -> %s' % (stats['edited'], stats['added'],
-                                                                    stats['unchanged'], sp))
+    log('[nfsu2] export: %d edited, %d added, %d moved props, %d unchanged -> %s'
+        % (stats['edited'], stats['added'], stats['moved'], stats['unchanged'], sp))
     return stats
 
 

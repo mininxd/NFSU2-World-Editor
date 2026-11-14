@@ -41,6 +41,14 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         name='Load Textures',
         description='Decode the game textures (DXT1/DXT3/P8) and build image materials',
         default=True)
+    skip_panoramas: BoolProperty(
+        name='Skip Backdrops (PAN_*)',
+        description='Leave out the distant panorama/skydome models around the map',
+        default=False)
+    collision: BoolProperty(
+        name='Show Collision',
+        description='Add a wireframe COLLISION_<section> mesh of the drivable surfaces and walls (read only)',
+        default=False)
     clear: BoolProperty(
         name='Clear Scene First',
         description='Delete all existing objects before importing',
@@ -65,7 +73,8 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
             importer.clear_scene()
         try:
             stats = importer.import_world(tracks, region, sections, self.instances, context=context,
-                                          textures=self.textures)
+                                          textures=self.textures, skip_panoramas=self.skip_panoramas,
+                                          collision=self.collision)
         except (FileNotFoundError, KeyError) as ex:
             self.report({'ERROR'}, str(ex).strip('"\''))
             return {'CANCELLED'}
@@ -84,6 +93,8 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         layout.prop(self, 'sections')
         layout.prop(self, 'instances')
         layout.prop(self, 'textures')
+        layout.prop(self, 'skip_panoramas')
+        layout.prop(self, 'collision')
         layout.prop(self, 'clear')
 
 
@@ -99,6 +110,23 @@ class EXPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ExportHelper):
         name='Source TRACKS Folder',
         description='Original files the sections were imported from (empty = remembered at import)',
         subtype='DIR_PATH', default='')
+    place_scenery: BoolProperty(
+        name='Place New Objects',
+        description='Add a scenery placement for every new object so the game draws it',
+        default=True)
+    rebuild_collision: BoolProperty(
+        name='Collision for New Objects',
+        description='Add drivable collision from the upward faces of new objects '
+                    '(custom property nfs_collision = 0 skips an object, nfs_surface sets the surface id)',
+        default=True)
+    collision_walls: BoolProperty(
+        name='Steep Faces as Walls',
+        description='Turn steep faces of new objects into barrier walls',
+        default=False)
+    move_instances: BoolProperty(
+        name='Write Moved Props',
+        description='Write back moved/rotated scenery instances (trees, signs, poles...)',
+        default=True)
 
     def invoke(self, context, event):
         from .exporter import section_collections
@@ -113,12 +141,16 @@ class EXPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ExportHelper):
         out_dir = os.path.dirname(bpy.path.abspath(self.filepath))
         try:
             st = exporter.export_world(out_dir, context,
-                                       tracks=bpy.path.abspath(self.tracks_dir) if self.tracks_dir else None)
+                                       tracks=bpy.path.abspath(self.tracks_dir) if self.tracks_dir else None,
+                                       place_scenery=self.place_scenery,
+                                       rebuild_collision=self.rebuild_collision,
+                                       collision_walls=self.collision_walls,
+                                       move_instances=self.move_instances)
         except (RuntimeError, ValueError, FileNotFoundError, KeyError) as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
-        self.report({'INFO'}, 'NFSU2: %d edited, %d new object(s) -> %s (collision not rebuilt yet)'
-                    % (st['edited'], st['added'], st['stream']))
+        self.report({'INFO'}, 'NFSU2: %d edited, %d new object(s), %d moved prop(s), +%d collision polygons -> %s'
+                    % (st['edited'], st['added'], st['moved'], st['collision_polys'], st['stream']))
         return {'FINISHED'}
 
 

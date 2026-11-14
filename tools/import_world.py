@@ -22,6 +22,8 @@ def parse(argv):
     ap.add_argument('--sections', default='C21', help='comma-separated tags, e.g. C21,C22,B26, or "all" for the whole region')
     ap.add_argument('--instances', action='store_true', help='also place scenery instances')
     ap.add_argument('--no-textures', action='store_true', help='skip texture decoding (grey materials)')
+    ap.add_argument('--collision', action='store_true', help='add COLLISION_<tag> wireframe meshes')
+    ap.add_argument('--skip-pan', action='store_true', help='leave out PAN_*/SKYDOME backdrop models')
     ap.add_argument('--keep', action='store_true', help='keep the default scene objects')
     ap.add_argument('--blend', help='save a .blend here')
     ap.add_argument('--obj', help='export a Wavefront .obj here')
@@ -39,7 +41,7 @@ def main():
     t0 = time.time()
     try:
         stats = importer.import_world(a.tracks, a.region, a.sections, a.instances,
-                                      textures=not a.no_textures)
+                                      textures=not a.no_textures, skip_panoramas=a.skip_pan, collision=a.collision)
     except (FileNotFoundError, KeyError) as ex:
         print('[nfsu2] error:', ex, file=sys.stderr)
         sys.exit(1)

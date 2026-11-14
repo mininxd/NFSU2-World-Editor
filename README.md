@@ -14,12 +14,18 @@ A **two-way converter** for world geometry and textures: game files → editable
 | Geometry (`0x80134010` SolidObjects) | Blender import of any sections, with scenery instances | Blender export: edited meshes (positions, UVs, prelight colours, any vertex/triangle count ≤ 65535 verts) and **new objects** |
 | Textures (`0xB3300000` packs) | PNG/TGA export; real UV-mapped image materials in Blender (alpha only where the game uses it) | Re-import of edited PNG/TGA: re-encoded to the original format (DXT1/DXT3/DXT5/P8/ARGB8), same size, mips regenerated |
 | Section layout | parsed | sections stay on 2 KiB boundaries; `L4Rx.BUN` section table (offset / size / size-without-pixels) updated |
+| Collision (`0x80034130`) | parsed; optional wireframe `COLLISION_<tag>` mesh in Blender | new objects get ground collision (and optional walls); grid, cell refs and bounds rebuilt exactly like the shipped packs |
+| Scenery placements (`0x80034100`) | instances placed in Blender | new objects get a placement (the game only draws placed models); moved/rotated props written back; bounding tree rebuilt |
+| Visibility / drivable areas (`0x80034150`, in `L4Rx.BUN`) | parsed (boundaries, visible lists, loading sections) | edited by the road builder (boundaries extended, visible lists updated) |
+| Road graph (`ROUTES*/Routes*.bin`) | parsed (routes, points, widths, connections) | byte-identical rebuild only; adding routes isn't supported |
 
 **Round trip is lossless.** Parsing and rebuilding produces byte-identical `STREAM*.BUN` and `L4R*.BUN` for all eight shipped regions. Exporting without edits (from Blender or the texture tool) reproduces the original files byte for byte, because only edited objects or textures are re-encoded. Re-encoding every one of the 10,735 L4RA objects from decoded data gives identical bytes for all but one (a shipped object whose stored material bounds don't match its vertices).
 
-> ⚠️ **Collision is not rebuilt yet.** The collision pack (`0x80034130`) isn't updated. Edited or new geometry draws in game, but cars still drive on the old collision surface: they'll fall through a raised road or hit invisible walls. Rebuilding collision is the next milestone. Brand-new objects get added to the section's solid list, but the game may also need a scenery placement or preculler entry before it draws them. That part is still unverified in game.
+All collision packs (255 in L4RA), the L4RA visibility manager and all 226 `Routes*.bin` files rebuild byte for byte. Rebuilding the collision grid from the polygons reproduces the shipped cell lists and masks.
 
-Other limitations: textures can't be resized or added yet (same size and format only). Scenery-instance transforms aren't written back. Textures from `GLOBAL\*.BUN` (a few effect sprites) aren't loaded. The game, not this tool, decides whether it accepts an edit, so keep backups and test in game.
+> ⚠️ **Collision of edited shipped objects isn't rebuilt.** New objects get collision, but if you raise or move a shipped road, cars still drive on its old surface. Also, none of the new-object, collision or road-builder output has been tested in game yet.
+
+Other limitations: textures can't be resized or added yet (same size and format only). New areas don't appear on the minimap or GPS (the road graph isn't extended). Textures from `GLOBAL\*.BUN` (a few effect sprites) aren't loaded. The game, not this tool, decides whether it accepts an edit, so keep backups and test in game.
 
 ## Requirements
 - Blender **4.2 or newer**
@@ -48,6 +54,8 @@ Other limitations: textures can't be resized or added yet (same size and format 
 | Sections | Comma-separated section tags, e.g. `C21,C22,B26`, or `all` for the whole region (list them with the `sections` tool below) |
 | Include Scenery Instances | Also place props such as trees, walls, and signs |
 | Load Textures | Decode the game textures and build image materials (texture × baked light × 2, like the game) |
+| Skip Backdrops (PAN_*) | Leave out the distant panorama and skydome models |
+| Show Collision | Add a wireframe `COLLISION_<tag>` mesh per section (grey = road, green = grass, red = walls); it's read-only and never exported |
 | Clear Scene First | Delete existing objects before importing |
 
 Each object keeps `nfs_*` custom properties (section, hash, file offset, and a checksum) that the exporter uses. The game uses Z-up, and coordinates are kept 1:1. To see textures in the viewport, switch Solid shading to **Texture** colour, or use Material Preview.
@@ -57,8 +65,9 @@ Each object keeps `nfs_*` custom properties (section, hash, file offset, and a c
 2. **Edit**:
    - move, scale or rotate objects, or edit vertices, UVs and the `prelight` colour attribute. Adding or removing faces is fine too;
    - assign any imported `tex_<HASH>` material to faces to use that game texture;
-   - **add new geometry**: create a mesh object and link it **directly** into a `SECTION_<tag>` collection. It's exported as a new object named after the Blender object (world-space vertices).
-3. **Export** with **File > Export > NFSU2 World (.BUN)** and pick an **output folder** (not your game folder; the tool refuses to overwrite the originals). It writes `STREAML4RA.BUN` + `L4RA.BUN` there, re-encoding only what changed.
+   - **add new geometry**: create a mesh object and link it **directly** into a `SECTION_<tag>` collection. It's exported as a new object named after the Blender object (world-space vertices). It gets a scenery placement so the game draws it, and its upward faces become drivable collision. Set the custom property `nfs_collision = 0` to skip collision, or `nfs_surface` to choose the surface id (1 road, 15 grass, 20 wall);
+   - **move props**: move, rotate or uniformly scale scenery instances (`*.inst` objects) and they're written back.
+3. **Export** with **File > Export > NFSU2 World (.BUN)** and pick an **output folder** (not your game folder; the tool refuses to overwrite the originals). It writes `STREAML4RA.BUN` + `L4RA.BUN` there, re-encoding only what changed. You can switch off *Place New Objects*, *Collision for New Objects*, *Steep Faces as Walls* and *Write Moved Props* (the CLI flags are `--no-scenery`, `--no-collision`, `--walls`, `--no-moves`).
 4. Back up your game's `TRACKS\STREAML4RA.BUN` and `TRACKS\L4RA.BUN`, copy both new files in, and test.
 
 Headless alternative: `blender -b edited.blend --python tools/export_world.py -- --out OUTDIR`.
@@ -99,10 +108,25 @@ blender -b --factory-startup --python tools/import_world.py -- --tracks "C:/Game
 blender -b --factory-startup --python tools/import_world.py -- --tracks "C:/Games/NFSU2/TRACKS" --sections all --instances --blend bayview_full.blend
 ```
 
+### Building a new road (road builder)
+`tools/build_road_mod.py` turns a plan JSON into a drivable road:
+- centre line, junction points, height keys and an optional flat island;
+- a textured road mesh with kerbs, bridge deck and pillars;
+- collision with walls, opened at the junctions;
+- scenery placements;
+- extended drivable boundaries and visible lists in `L4Rx.BUN`.
+
+It needs `pip install shapely`:
+```
+python tools/build_road_mod.py --tracks "/path/to/TRACKS" --plan plan.json --out OUTDIR --host E21
+```
+The plan keys are documented in `nfsu2_world_editor/core/road_mod.py`. The output goes to `OUTDIR`; the originals are never touched.
+
 ## Development
 ```
 python -m pip install pytest numpy   # numpy optional: tests cover both code paths
 python -m pytest            # synthetic test data only, no game files needed
+NFSU2_TRACKS=/path/to/TRACKS python -m pytest   # also run the round trips on your own game files
 python build_addon.py       # build the add-on zip into dist/
 ```
 Layout:
@@ -112,6 +136,8 @@ Layout:
   - `meshcodec`, `solidlist`: lossless SolidObject decode/encode, adding objects
   - `tpk`, `dxt`, `image`: texture packs, DXT1/3/5, P8 and ARGB codecs, PNG/TGA
   - `chunks`, `world`, `files`, `writer`: readers used by the importer, plus synthetic test data
+  - `collision`, `scenery`, `visibility`, `routes`: collision packs, scenery placements and trees, drivable boundaries and visible lists, road graph
+  - `world_edit`, `road_builder`, `road_mod`: placing models, adding collision, moving props, and the road builder
 - `nfsu2_world_editor/blender/`: importer, textures/materials, exporter, File > Import/Export operators
 - `tools/`: headless Blender import/export and the round-trip self-test
 - `nfsu2_world_editor/cli/`: command-line tools
@@ -120,7 +146,7 @@ Layout:
 
 **Never commit game files** or anything derived from them (`.BUN`, `.BIN`, `.blend`, `.obj`, renders, dumps, exported textures). `.gitignore` blocks them.
 
-**Next steps:** collision rebuild (`0x80034130`: polygons, 32-unit grid, cell references, following the FRS docs). After that, scenery placement records for new objects, texture add/resize, and writing back scenery-instance transforms.
+**Next steps:** rebuild collision for edited shipped objects, add routes to the road graph (minimap and GPS), and add or resize textures.
 
 ## Bahasa Indonesia (ringkas)
 Add-on Blender dan tool command-line buat membaca world NFSU2. Bisa jalan di **Windows dan Linux**. Repo ini cuma berisi source code, file game **tidak** disertakan.
@@ -136,7 +162,8 @@ Daftar section bisa dilihat dengan `python -m nfsu2_world_editor.cli.sections --
 - **Geometri:** import section-nya, terus edit di Blender (geser atau naikin objek, edit vertex/UV, atau tambah mesh baru langsung ke koleksi `SECTION_<tag>`). Habis itu **File > Export > NFSU2 World (.BUN)** dan pilih folder output **selain** folder game. Hasilnya `STREAML4RA.BUN` + `L4RA.BUN` baru. Kalau diekspor tanpa edit, hasilnya identik byte per byte dengan file asli.
 - **Tekstur:** `python -m nfsu2_world_editor.cli.textures export --tracks "<TRACKS>" --out tex` buat dapetin PNG-nya. Edit PNG-nya (ukurannya jangan diubah), terus `... textures import --tracks "<TRACKS>" --dir tex --out mod` buat bikin BUN baru (DXT1/DXT3/P8 di-encode ulang otomatis).
 - Backup dulu file aslinya, baru salin file hasil ke folder `TRACKS` game.
-- ⚠️ **Collision belum di-update**, jadi geometri yang diedit kelihatan di game tapi mobil masih jalan di permukaan lama. Ini langkah berikutnya.
+- Objek baru otomatis dapat *scenery placement* (biar digambar game) dan collision dari permukaan yang menghadap ke atas. Props (pohon, tiang, rambu) yang digeser atau diputar juga ikut ditulis balik.
+- ⚠️ Collision objek asli yang **diedit** belum di-update, jadi mobil masih jalan di permukaan lamanya. Semua ini juga belum dites di game.
 
 ## Format references
 - [FRSWorlsEditor NFSU2 format docs](https://github.com/chrystianfarias/FRSWorlsEditor)
