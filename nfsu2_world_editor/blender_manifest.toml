@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "nfsu2_world_editor"
-version = "0.2.0"
+version = "0.3.0"
 name = "NFSU2 World Editor"
-tagline = "Import Need for Speed: Underground 2 world geometry"
+tagline = "Import, edit and export NFSU2 world geometry and textures"
 maintainer = "mininxd"
 type = "add-on"
 website = "https://github.com/mininxd/NFSU2-World-Editor"
@@ -14,7 +14,7 @@ blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
-files = "Read NFSU2 world files (.BUN) from disk"
+files = "Read NFSU2 world files (.BUN) and write edited copies to a folder you choose"
 
 [build]
 paths_exclude_pattern = ["__pycache__/", "*.pyc"]

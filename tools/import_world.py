@@ -21,10 +21,13 @@ def parse(argv):
     ap.add_argument('--region', default='L4RA')
     ap.add_argument('--sections', default='C21', help='comma-separated tags, e.g. C21,C22,B26, or "all" for the whole region')
     ap.add_argument('--instances', action='store_true', help='also place scenery instances')
+    ap.add_argument('--no-textures', action='store_true', help='skip texture decoding (grey materials)')
     ap.add_argument('--keep', action='store_true', help='keep the default scene objects')
     ap.add_argument('--blend', help='save a .blend here')
     ap.add_argument('--obj', help='export a Wavefront .obj here')
     ap.add_argument('--png', help='render a top-down preview here')
+    ap.add_argument('--png-mode', default='TEXTURE', choices=('TEXTURE', 'MATERIAL'),
+                    help='Workbench colour mode for --png (default TEXTURE)')
     return ap.parse_args(argv)
 
 
@@ -35,7 +38,8 @@ def main():
         importer.clear_scene()
     t0 = time.time()
     try:
-        stats = importer.import_world(a.tracks, a.region, a.sections, a.instances)
+        stats = importer.import_world(a.tracks, a.region, a.sections, a.instances,
+                                      textures=not a.no_textures)
     except (FileNotFoundError, KeyError) as ex:
         print('[nfsu2] error:', ex, file=sys.stderr)
         sys.exit(1)
@@ -48,7 +52,7 @@ def main():
         bpy.ops.wm.obj_export(filepath=os.path.abspath(a.obj), export_materials=True,
                               export_colors=True, forward_axis='Y', up_axis='Z')
     if a.png:
-        importer.render_preview(a.png)
+        importer.render_preview(a.png, color_type=a.png_mode)
 
 
 main()

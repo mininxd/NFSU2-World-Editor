@@ -67,6 +67,8 @@ def write_solid_object(w, name, verts, faces, uvs=None, cols=None, normals=None,
     w.begin(SOLID_OBJECT)
     hdr = bytearray(0xA4)
     struct.pack_into('<I', hdr, 0x10, model_hash)
+    struct.pack_into('<I', hdr, 0x14, len(faces))
+    hdr[0x19] = len(tex_hashes) & 0xFF
     struct.pack_into('<16f', hdr, 0x40, *matrix)
     w.leaf(SOLID_HEADER, bytes(hdr) + name.encode('ascii') + b'\0', align=True)
     w.leaf(SOLID_TEXLIST, b''.join(struct.pack('<II', h, 0) for h in tex_hashes), align=True)
@@ -135,4 +137,53 @@ def write_scenery_pack(w, model_hashes, instances):
         struct.pack_into('<9h', r, 0x2C, *[int(round(x * 8192)) for x in rot])
         recs += r
     w.leaf(SCENERY_INSTANCES, bytes(recs), align=True)
+    w.end()
+
+
+def write_texture_pack(w, textures, name='TRACK', path='Location4\\Test.tpk'):
+    """Write a ``0xB3300000`` texture pack. ``textures``: dicts with name, hash,
+    format (D3DFORMAT / FourCC), width, height, mips, data (all mip levels) and
+    optional palette (1024 bytes, P8), usage, blend. Textures are sorted by hash
+    like the shipped packs; palettes are stored first in the pixel block."""
+    from .tpk import (TPK, TPK_INFO, TPK_NAME, TPK_HASHES, TPK_HEADERS, TPK_FORMATS, TPK_DATA,
+                      TPK_PIXELS, HEADER_SIZE, FORMAT_SIZE)
+    texs = sorted(textures, key=lambda t: t['hash'])
+    pixels = bytearray()
+    pal_off = {}
+    for i, t in enumerate(texs):
+        if t.get('palette'):
+            pal_off[i] = len(pixels)
+            pixels += t['palette']
+    hashes, headers, formats = bytearray(), bytearray(), bytearray()
+    for i, t in enumerate(texs):
+        off = len(pixels)
+        pixels += t['data']
+        h = bytearray(HEADER_SIZE)
+        nm = t['name'].encode('ascii')[:23]
+        h[0x0C:0x0C + len(nm)] = nm
+        struct.pack_into('<IIIIIIII', h, 0x24, t['hash'], 0x1A93CF, 0, off, pal_off.get(i, 0),
+                         len(t['data']), 1024 if i in pal_off else 0, 0)
+        struct.pack_into('<HH', h, 0x44, t['width'], t['height'])
+        h[0x4E] = t.get('mips', 1)
+        h[0x55] = t.get('usage', 0)
+        h[0x56] = t.get('blend', 0)
+        headers += h
+        f = bytearray(FORMAT_SIZE)
+        struct.pack_into('<I', f, 0x14, t['format'])
+        formats += f
+        hashes += struct.pack('<II', t['hash'], 0)
+    w.begin(TPK)
+    w.begin(TPK_INFO)
+    nmb = bytearray(0x7C)
+    nmb[4:4 + len(name)] = name.encode('ascii')
+    nmb[0x20:0x20 + len(path)] = path.encode('ascii')
+    w.leaf(TPK_NAME, bytes(nmb))
+    w.leaf(TPK_HASHES, bytes(hashes))
+    w.leaf(TPK_HEADERS, bytes(headers))
+    w.leaf(TPK_FORMATS, bytes(formats))
+    w.end()
+    w.begin(TPK_DATA)
+    w.leaf(0x33320001, bytes(24))
+    w.leaf(TPK_PIXELS, bytes(pixels), align=True)
+    w.end()
     w.end()

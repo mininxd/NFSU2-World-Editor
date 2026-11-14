@@ -3,7 +3,7 @@ import os
 
 import bpy
 from bpy.props import BoolProperty, StringProperty
-from bpy_extras.io_utils import ImportHelper
+from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ..core.files import region_from_filename, resolve_tracks_dir, list_regions
 from . import importer
@@ -37,6 +37,10 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         name='Include Scenery Instances',
         description='Also place the scenery props (trees, poles, signs...) of each section',
         default=True)
+    textures: BoolProperty(
+        name='Load Textures',
+        description='Decode the game textures (DXT1/DXT3/P8) and build image materials',
+        default=True)
     clear: BoolProperty(
         name='Clear Scene First',
         description='Delete all existing objects before importing',
@@ -60,7 +64,8 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         if self.clear:
             importer.clear_scene()
         try:
-            stats = importer.import_world(tracks, region, sections, self.instances, context=context)
+            stats = importer.import_world(tracks, region, sections, self.instances, context=context,
+                                          textures=self.textures)
         except (FileNotFoundError, KeyError) as ex:
             self.report({'ERROR'}, str(ex).strip('"\''))
             return {'CANCELLED'}
@@ -78,23 +83,65 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         layout.prop(self, 'region')
         layout.prop(self, 'sections')
         layout.prop(self, 'instances')
+        layout.prop(self, 'textures')
         layout.prop(self, 'clear')
+
+
+class EXPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ExportHelper):
+    """Write edited NFSU2 sections back to STREAML4Rx.BUN + L4Rx.BUN in a new folder"""
+    bl_idname = 'export_scene.nfsu2_world'
+    bl_label = 'Export NFSU2 World'
+    bl_options = {'REGISTER'}
+
+    filename_ext = '.BUN'
+    filter_glob: StringProperty(default='*.bun;*.BUN', options={'HIDDEN'})
+    tracks_dir: StringProperty(
+        name='Source TRACKS Folder',
+        description='Original files the sections were imported from (empty = remembered at import)',
+        subtype='DIR_PATH', default='')
+
+    def invoke(self, context, event):
+        from .exporter import section_collections
+        colls = section_collections(context.scene)
+        region = (colls[0].get('nfs_region') if colls else None) or 'L4RA'
+        if not self.filepath:
+            self.filepath = 'STREAM%s.BUN' % region
+        return super().invoke(context, event)
+
+    def execute(self, context):
+        from . import exporter
+        out_dir = os.path.dirname(bpy.path.abspath(self.filepath))
+        try:
+            st = exporter.export_world(out_dir, context,
+                                       tracks=bpy.path.abspath(self.tracks_dir) if self.tracks_dir else None)
+        except (RuntimeError, ValueError, FileNotFoundError, KeyError) as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'NFSU2: %d edited, %d new object(s) -> %s (collision not rebuilt yet)'
+                    % (st['edited'], st['added'], st['stream']))
+        return {'FINISHED'}
+
+
+def menu_func_export(self, context):
+    self.layout.operator(EXPORT_SCENE_OT_nfsu2_world.bl_idname, text='NFSU2 World (.BUN)')
 
 
 def menu_func_import(self, context):
     self.layout.operator(IMPORT_SCENE_OT_nfsu2_world.bl_idname, text='NFSU2 World (.BUN)')
 
 
-classes = (IMPORT_SCENE_OT_nfsu2_world,)
+classes = (IMPORT_SCENE_OT_nfsu2_world, EXPORT_SCENE_OT_nfsu2_world)
 
 
 def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
 
 def unregister():
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     for c in reversed(classes):
         bpy.utils.unregister_class(c)

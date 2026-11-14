@@ -13,6 +13,8 @@ from mathutils import Matrix, Vector
 from ..core import (find, parse_object, section_table, build_model_index,
                     iter_scenery_instances, is_preplaced, region_paths, read_bytes,
                     SOLID_OBJECT)
+from ..core.stream import Region
+from .textures import TextureLibrary, build_material
 
 STORAGE_DISTANCE = 1500.0   # models this far from the section centre sit on the 'storage grid'
 
@@ -26,21 +28,14 @@ def parse_sections(text):
     return [] if any(t in ALL_SECTIONS for t in tags) else tags
 
 
-def _material(texhash, cache):
-    name = 'tex_%08X' % texhash
-    m = cache.get(name) or bpy.data.materials.get(name)
+def _material(texhash, cache, lib=None, section=None):
+    m = cache.get(texhash)
     if m is None:
-        m = bpy.data.materials.new(name)
-        m['nfs_texture_hash'] = '%08X' % texhash
-        # deterministic pastel colour per texture so materials differ without textures
-        h = texhash * 2654435761 & 0xFFFFFFFF
-        m.diffuse_color = (0.35 + (h & 255) / 512, 0.35 + (h >> 8 & 255) / 512,
-                           0.35 + (h >> 16 & 255) / 512, 1.0)
-    cache[name] = m
+        m = cache[texhash] = build_material(texhash, lib, section)
     return m
 
 
-def build_mesh(o, name, cache):
+def build_mesh(o, name, cache, lib=None, section=None):
     me = bpy.data.meshes.new(name)
     me.from_pydata(o['verts'], [], o['faces'])
     me.uv_layers.new(name='UVMap')
@@ -55,14 +50,15 @@ def build_mesh(o, name, cache):
         r, g, b, a = o['cols'][v]
         cl += (r / 255, g / 255, b / 255, a / 255)
     me.uv_layers['UVMap'].data.foreach_set('uv', uv)
-    me.color_attributes['prelight'].data.foreach_set('color', cl)
+    # store the game's bytes as-is (sRGB byte colour) so they export back exactly
+    me.color_attributes['prelight'].data.foreach_set('color_srgb', cl)
     tex = o['tex']
     slots = {}
     for _, _, t in o['mats']:
         th = tex[t] if t < len(tex) else 0
         if th not in slots:
             slots[th] = len(me.materials)
-            me.materials.append(_material(th, cache))
+            me.materials.append(_material(th, cache, lib, section))
     remap = [slots[tex[t] if t < len(tex) else 0] for _, _, t in o['mats']]
     for p, fm in zip(me.polygons, o['face_mat']):
         p.material_index = remap[fm] if fm < len(remap) else 0
@@ -81,7 +77,7 @@ def _key(h, m):
 
 
 def import_world(tracks, region='L4RA', sections=('C21',), instances=True, context=None,
-                 log=print):
+                 log=print, textures=True):
     """Import ``sections`` of ``region`` from the TRACKS folder into the current scene.
 
     An empty ``sections`` list (or ``'all'``) imports every section of the region.
@@ -99,7 +95,9 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
     if unknown:
         raise KeyError('Unknown section(s) %s in %s. Examples: %s' % (
             ', '.join(unknown), l4_path.name, ', '.join(sorted(table)[:12])))
-    sbuf = read_bytes(stream_path)
+    reg = Region(read_bytes(stream_path), read_bytes(l4_path), region.upper())
+    sbuf = reg.src
+    lib = TextureLibrary(reg) if textures else None
     scene = context.scene
     cache = {}
     stats = {}
@@ -113,6 +111,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
         coll['nfs_section_number'] = e['num']
         coll['nfs_stream_offset'] = e['offset']
         coll['nfs_stream_size'] = e['size']
+        coll['nfs_tracks_dir'] = str(tracks_dir)
         scoll = bpy.data.collections.new('STORAGE_' + tag)
         coll.children.link(scoll)
         scoll.hide_render = True
@@ -124,7 +123,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
             o = parse_object(sbuf, d, s)
             if not o or not o['faces']:
                 continue
-            ob = bpy.data.objects.new(o['name'], build_mesh(o, o['name'], cache))
+            ob = bpy.data.objects.new(o['name'], build_mesh(o, o['name'], cache, lib, tag))
             ob.matrix_world = game_matrix(o['matrix'])
             ob['nfs_hash'] = '%08X' % o['hash']
             ob['nfs_name'] = o['name']
@@ -133,6 +132,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
             ob['nfs_chunk_size'] = s + 8
             ob['nfs_vertex_stride'] = o['stride']
             ob['nfs_kind'] = 'solid'
+            ob['nfs_region'] = region.upper()
             # models parked on the far 'storage grid' (XB_* etc.) are drawn only via instances
             n = len(o['verts'])
             wc = ob.matrix_world @ Vector([sum(v[k] for v in o['verts']) / n for k in range(3)])
@@ -142,6 +142,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
                 n_store += 1
                 continue
             coll.objects.link(ob)
+            ob['nfs_sig'] = mesh_signature(ob)
             n_obj += 1
             n_tri += len(o['faces'])
             placed.add(_key(o['hash'], o['matrix']))
@@ -158,7 +159,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
                 if h not in meshes:
                     o = parse_object(sbuf, *model_index[h])
                     ok = o and o['faces'] and not is_preplaced(o)
-                    meshes[h] = (build_mesh(o, o['name'], cache), o) if ok else None
+                    meshes[h] = (build_mesh(o, o['name'], cache, lib, tag), o) if ok else None
                 if meshes[h] is None:
                     continue
                 key = _key(h, gm)
@@ -180,12 +181,47 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
     return stats
 
 
+def mesh_signature(ob):
+    """Checksum of everything the exporter writes for a solid object. The
+    exporter skips objects whose signature still matches the one stored at
+    import, so untouched objects keep their original bytes."""
+    import hashlib
+    from array import array
+    me = ob.data
+    hsh = hashlib.sha1()
+    for coll, attr, n, typ in ((me.vertices, 'co', 3, 'f'), (me.loops, 'vertex_index', 1, 'i'),
+                               (me.polygons, 'material_index', 1, 'i')):
+        a = array(typ, [0]) * (len(coll) * n)
+        coll.foreach_get(attr, a)
+        hsh.update(a.tobytes())
+    uv = me.uv_layers.active
+    if uv is not None:
+        a = array('f', [0.0]) * (len(me.loops) * 2)
+        uv.data.foreach_get('uv', a)
+        hsh.update(a.tobytes())
+    ca = me.color_attributes.get('prelight')
+    if ca is not None:
+        a = array('f', [0.0]) * (len(ca.data) * 4)
+        ca.data.foreach_get('color_srgb', a)
+        hsh.update(a.tobytes())
+    hsh.update(','.join(m.get('nfs_texture_hash', m.name) if m else '-' for m in me.materials).encode())
+    hsh.update(array('f', [x for row in ob.matrix_world for x in row]).tobytes())
+    return hsh.hexdigest()
+
+
 def clear_scene():
+    """Delete all objects, the importer's collections and now-unused meshes."""
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob)
+    for c in list(bpy.data.collections):
+        if c.get('nfs_section') is not None or c.name.startswith(('STORAGE_', 'SCENERY_')):
+            bpy.data.collections.remove(c)
+    for me in list(bpy.data.meshes):
+        if me.users == 0:
+            bpy.data.meshes.remove(me)
 
 
-def render_preview(path, resolution=(1600, 1000)):
+def render_preview(path, resolution=(1600, 1000), color_type='MATERIAL'):
     """Top-down orthographic Workbench render of all visible meshes to ``path``."""
     scene = bpy.context.scene
     obs = [o for o in scene.objects if o.type == 'MESH' and not o.get('nfs_storage')]
@@ -208,7 +244,7 @@ def render_preview(path, resolution=(1600, 1000)):
     scene.render.engine = 'BLENDER_WORKBENCH'
     sh = scene.display.shading
     sh.light = 'STUDIO'
-    sh.color_type = 'MATERIAL'
+    sh.color_type = color_type
     sh.show_cavity = True
     sh.show_shadows = False
     sh.background_type = 'VIEWPORT'

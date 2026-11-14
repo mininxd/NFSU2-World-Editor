@@ -19,11 +19,15 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install test deps
-        run: python -m pip install pytest
-      - name: Run tests
+        run: python -m pip install pytest numpy
+      - name: Run tests (numpy fast path + pure-Python path)
         run: python -m pytest -v
       - name: CLI smoke test
-        run: python -m nfsu2_world_editor.cli.chunkdump --help
+        run: |
+          python -m nfsu2_world_editor.cli.chunkdump --help
+          python -m nfsu2_world_editor.cli.textures --help
+          python -m nfsu2_world_editor.cli.textures export --help
+          python -m nfsu2_world_editor.cli.roundtrip --help
       - name: Build add-on zip
         run: python build_addon.py --out dist
       - uses: actions/upload-artifact@v4

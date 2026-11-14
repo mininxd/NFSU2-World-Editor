@@ -7,10 +7,10 @@ The ``core`` and ``cli`` sub-packages do not need Blender, so e.g.
 bl_info = {
     'name': 'NFSU2 World Editor',
     'author': 'mininxd',
-    'version': (0, 2, 0),
+    'version': (0, 3, 0),
     'blender': (4, 2, 0),
-    'location': 'File > Import > NFSU2 World (.BUN)',
-    'description': 'Import Need for Speed: Underground 2 world geometry',
+    'location': 'File > Import / Export > NFSU2 World (.BUN)',
+    'description': 'Import, edit and export Need for Speed: Underground 2 world geometry and textures',
     'category': 'Import-Export',
 }
 

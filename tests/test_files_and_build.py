@@ -58,10 +58,25 @@ def test_build_zip(tmp_path):
     assert not any('__pycache__' in n or n.endswith('.pyc') for n in names)
 
 
-def test_core_has_no_bpy_or_numpy_dependency():
+def test_core_has_no_bpy_and_numpy_is_optional():
     import pathlib
+    import subprocess
+    import sys
     import nfsu2_world_editor
     core = pathlib.Path(nfsu2_world_editor.__file__).parent / 'core'
     for p in core.glob('*.py'):
         src = p.read_text(encoding='utf-8')
-        assert 'import bpy' not in src and 'numpy' not in src, p.name
+        assert 'import bpy' not in src, p.name
+        for line in src.splitlines():
+            if 'import numpy' in line:
+                assert line.startswith('    '), '%s: numpy must be an optional (guarded) import' % p.name
+    # everything works with numpy unavailable (plain Blender-less CPython)
+    code = ('import sys; sys.modules["numpy"] = None\n'
+            'from nfsu2_world_editor.core import dxt, tpk, bchunk, stream, meshcodec, image, solidlist\n'
+            'assert not dxt.HAVE_NUMPY\n'
+            'img = bytes((10, 200, 30, 255)) * 16\n'
+            'enc = dxt.encode(img, dxt.FOURCC_DXT1, 4, 4)\n'
+            'assert len(dxt.decode(enc, dxt.FOURCC_DXT1, 4, 4)) == 64\n'
+            'pal = dxt.build_palette(img); assert dxt.palette_error(img, pal) == 0\n')
+    root = pathlib.Path(nfsu2_world_editor.__file__).parent.parent
+    subprocess.run([sys.executable, '-c', code], check=True, cwd=str(root))
