@@ -88,11 +88,27 @@ def _pastel(texhash):
     return (0.35 + (h & 255) / 512, 0.35 + (h >> 8 & 255) / 512, 0.35 + (h >> 16 & 255) / 512, 1.0)
 
 
-def build_material(texhash, lib=None, section=None):
-    """Material ``tex_<HASH>`` (one per texture hash), shared by every mesh."""
+#: How world materials use the baked ``prelight`` vertex colours.
+#: ``'scene'``: the texture is the albedo and Blender's lights/sky light it.
+#:   NFSU2 bakes its night-time lighting (mostly near-black, lit by street
+#:   lamps) into the prelight, so multiplying it in under a sun or sky leaves an
+#:   albedo of a few percent: the specular sky sheen then hides the texture and
+#:   roads/terrain render as flat grey. The game look stays in the node tree
+#:   ("Baked light" mix, factor 0) and can be dialled in.
+#: ``'game'``: texture x prelight x 2 as the albedo (the old behaviour).
+LIGHTING_MODES = ('scene', 'game')
+
+
+def build_material(texhash, lib=None, section=None, lighting='scene'):
+    """Material ``tex_<HASH>`` (one per texture hash), shared by every mesh.
+    ``lighting`` is one of :data:`LIGHTING_MODES`."""
+    if lighting not in LIGHTING_MODES:
+        raise ValueError('lighting must be one of %s' % (LIGHTING_MODES,))
     name = 'tex_%08X' % texhash
     m = bpy.data.materials.get(name)
     if m is not None and (m.get('nfs_has_texture') or lib is None):
+        if m.get('nfs_has_texture'):
+            set_baked_light(m, 1.0 if lighting == 'game' else 0.0)
         return m
     tex = lib.lookup(texhash, section) if lib is not None else None
     if m is None:
@@ -107,10 +123,16 @@ def build_material(texhash, lib=None, section=None):
     nt = m.node_tree
     nt.nodes.clear()
     out = nt.nodes.new('ShaderNodeOutputMaterial')
-    out.location = (700, 0)
+    out.location = (900, 0)
     bsdf = nt.nodes.new('ShaderNodeBsdfPrincipled')
-    bsdf.location = (400, 0)
-    bsdf.inputs['Roughness'].default_value = 0.8
+    bsdf.location = (600, 0)
+    bsdf.inputs['Roughness'].default_value = 0.85
+    # world textures are matte; the default 0.5 specular turns them into a
+    # sky-coloured sheen at grazing angles
+    for key in ('Specular IOR Level', 'Specular'):
+        if key in bsdf.inputs:
+            bsdf.inputs[key].default_value = 0.2
+            break
     img = nt.nodes.new('ShaderNodeTexImage')
     img.location = (-400, 100)
     img.image = lib.image(tex)
@@ -132,8 +154,17 @@ def build_material(texhash, lib=None, section=None):
     sc.location = (150, 0)
     sc.inputs['Scale'].default_value = 2.0
     nt.links.new(mix.outputs[2], sc.inputs[0])
-    nt.links.new(sc.outputs['Vector'], bsdf.inputs['Base Color'])
+    # Baked light: 0 = plain texture (lit by the scene), 1 = game prelight look
+    baked = nt.nodes.new('ShaderNodeMix')
+    baked.name = baked.label = 'Baked light'
+    baked.data_type = 'RGBA'
+    baked.blend_type = 'MIX'
+    baked.location = (380, 100)
+    nt.links.new(img.outputs['Color'], baked.inputs[6])
+    nt.links.new(sc.outputs['Vector'], baked.inputs[7])
+    nt.links.new(baked.outputs[2], bsdf.inputs['Base Color'])
     nt.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+    set_baked_light(m, 1.0 if lighting == 'game' else 0.0)
     if tex.alpha_is_opacity():
         nt.links.new(img.outputs['Alpha'], bsdf.inputs['Alpha'])
         if tex.usage == 1:
@@ -148,3 +179,16 @@ def build_material(texhash, lib=None, section=None):
     m['nfs_usage'] = tex.usage
     m['nfs_blend'] = tex.blend
     return m
+
+
+def set_baked_light(material, factor):
+    """Blend between the plain texture (0.0) and the game's texture x prelight
+    x 2 look (1.0) on a world material made by :func:`build_material`.
+    Returns False for materials without the "Baked light" node."""
+    nt = material.node_tree if material.use_nodes else None
+    node = nt.nodes.get('Baked light') if nt is not None else None
+    if node is None:
+        return False
+    node.inputs['Factor'].default_value = float(factor)
+    material['nfs_baked_light'] = float(factor)
+    return True

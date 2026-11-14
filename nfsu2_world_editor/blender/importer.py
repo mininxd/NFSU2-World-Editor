@@ -29,14 +29,14 @@ def parse_sections(text):
     return [] if any(t in ALL_SECTIONS for t in tags) else tags
 
 
-def _material(texhash, cache, lib=None, section=None):
+def _material(texhash, cache, lib=None, section=None, lighting='scene'):
     m = cache.get(texhash)
     if m is None:
-        m = cache[texhash] = build_material(texhash, lib, section)
+        m = cache[texhash] = build_material(texhash, lib, section, lighting=lighting)
     return m
 
 
-def build_mesh(o, name, cache, lib=None, section=None):
+def build_mesh(o, name, cache, lib=None, section=None, lighting='scene'):
     me = bpy.data.meshes.new(name)
     me.from_pydata(o['verts'], [], o['faces'])
     me.uv_layers.new(name='UVMap')
@@ -59,7 +59,7 @@ def build_mesh(o, name, cache, lib=None, section=None):
         th = tex[t] if t < len(tex) else 0
         if th not in slots:
             slots[th] = len(me.materials)
-            me.materials.append(_material(th, cache, lib, section))
+            me.materials.append(_material(th, cache, lib, section, lighting))
     remap = [slots[tex[t] if t < len(tex) else 0] for _, _, t in o['mats']]
     for p, fm in zip(me.polygons, o['face_mat']):
         p.material_index = remap[fm] if fm < len(remap) else 0
@@ -88,7 +88,7 @@ def global_texture_files(tracks_dir, global_dir=None):
 
 def import_world(tracks, region='L4RA', sections=('C21',), instances=True, context=None,
                  log=print, textures=True, skip_panoramas=False, collision=False,
-                 global_dir=None):
+                 global_dir=None, lighting='scene'):
     """Import ``sections`` of ``region`` from the TRACKS folder into the current scene.
 
     An empty ``sections`` list (or ``'all'``) imports every section of the region.
@@ -99,6 +99,9 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
     ``global_dir`` (default: a ``GLOBAL`` folder next to TRACKS, if any) adds the
     game's shared texture packs (GLOBALB.BUN, InGameCommon.bun, ...) for
     textures the region itself does not carry.
+    ``lighting`` (``'scene'`` or ``'game'``, see ``textures.LIGHTING_MODES``):
+    ``'scene'`` uses the texture as albedo for Blender lighting; ``'game'``
+    multiplies in the baked (night-time) prelight like the game does.
     Returns ``{tag: (solids, triangles, scenery_instances)}``. Raises
     FileNotFoundError / KeyError with a readable message on bad input.
     """
@@ -147,7 +150,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
                 continue
             if skip_panoramas and o['name'].upper().startswith(PANORAMA_PREFIXES):
                 continue
-            ob = bpy.data.objects.new(o['name'], build_mesh(o, o['name'], cache, lib, tag))
+            ob = bpy.data.objects.new(o['name'], build_mesh(o, o['name'], cache, lib, tag, lighting))
             ob.matrix_world = game_matrix(o['matrix'])
             ob['nfs_hash'] = '%08X' % o['hash']
             ob['nfs_name'] = o['name']
@@ -184,7 +187,7 @@ def import_world(tracks, region='L4RA', sections=('C21',), instances=True, conte
                 if h not in meshes:
                     o = parse_object(sbuf, *model_index[h])
                     ok = o and o['faces'] and not is_preplaced(o)
-                    meshes[h] = (build_mesh(o, o['name'], cache, lib, tag), o) if ok else None
+                    meshes[h] = (build_mesh(o, o['name'], cache, lib, tag, lighting), o) if ok else None
                 if meshes[h] is None:
                     continue
                 key = _key(h, gm)

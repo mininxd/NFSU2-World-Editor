@@ -54,8 +54,9 @@ Other limitations: textures can't be resized or added yet (same size and format 
 | Region | e.g. `L4RA` (Bayview). Leave empty to detect it from the file name |
 | Sections | Comma-separated section tags, e.g. `C21,C22,B26`, or `all` for the whole region (list them with the `sections` tool below) |
 | Include Scenery Instances | Also place props such as trees, walls, and signs |
-| Load Textures | Decode the game textures and build image materials (texture × baked light × 2, like the game) |
+| Load Textures | Decode the game textures and build image materials |
 | Skip Backdrops (PAN_*) | Leave out the distant panorama and skydome models |
+| Lighting | **Scene Lights** (default): the texture is the albedo, lit by your sun/sky. **Game Prelight**: texture × baked light × 2, like the game. The baked light is the game's night lighting, so under a sun it renders roads and terrain near-black/flat grey; each material keeps a "Baked light" mix node to blend it back in (`--lighting game` in `tools/import_world.py`) |
 | Show Collision | Add a wireframe `COLLISION_<tag>` mesh per section (grey = road, green = grass, red = walls); it's read-only and never exported |
 | Clear Scene First | Delete existing objects before importing |
 

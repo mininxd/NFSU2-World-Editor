@@ -25,6 +25,8 @@ def parse(argv):
     ap.add_argument('--global-dir', help='game GLOBAL folder for shared textures (default: next to TRACKS)')
     ap.add_argument('--collision', action='store_true', help='add COLLISION_<tag> wireframe meshes')
     ap.add_argument('--skip-pan', action='store_true', help='leave out PAN_*/SKYDOME backdrop models')
+    ap.add_argument('--lighting', default='scene', choices=('scene', 'game'),
+                    help='scene: texture lit by Blender lights (default); game: x baked night prelight')
     ap.add_argument('--keep', action='store_true', help='keep the default scene objects')
     ap.add_argument('--blend', help='save a .blend here')
     ap.add_argument('--obj', help='export a Wavefront .obj here')
@@ -43,7 +45,7 @@ def main():
     try:
         stats = importer.import_world(a.tracks, a.region, a.sections, a.instances,
                                       textures=not a.no_textures, skip_panoramas=a.skip_pan, collision=a.collision,
-                                      global_dir=a.global_dir)
+                                      global_dir=a.global_dir, lighting=a.lighting)
     except (FileNotFoundError, KeyError) as ex:
         print('[nfsu2] error:', ex, file=sys.stderr)
         sys.exit(1)

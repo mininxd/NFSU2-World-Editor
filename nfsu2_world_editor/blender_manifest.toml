@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "nfsu2_world_editor"
-version = "0.4.1"
+version = "0.4.2"
 name = "NFSU2 World Editor"
 tagline = "Import, edit and export NFSU2 world and car geometry and textures"
 maintainer = "mininxd"

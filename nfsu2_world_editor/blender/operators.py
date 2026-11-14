@@ -2,7 +2,7 @@
 import os
 
 import bpy
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ..core.files import region_from_filename, resolve_tracks_dir, list_regions
@@ -49,6 +49,12 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         name='Show Collision',
         description='Add a wireframe COLLISION_<section> mesh of the drivable surfaces and walls (read only)',
         default=False)
+    lighting: EnumProperty(
+        name='Lighting',
+        description='How the materials use the baked (night-time) prelight vertex colours',
+        items=(('scene', 'Scene Lights', 'Texture is the albedo; your sun/sky lights it'),
+               ('game', 'Game Prelight', 'Texture x baked prelight x 2, like the game (dark under a sun)')),
+        default='scene')
     clear: BoolProperty(
         name='Clear Scene First',
         description='Delete all existing objects before importing',
@@ -74,7 +80,7 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         try:
             stats = importer.import_world(tracks, region, sections, self.instances, context=context,
                                           textures=self.textures, skip_panoramas=self.skip_panoramas,
-                                          collision=self.collision)
+                                          collision=self.collision, lighting=self.lighting)
         except (FileNotFoundError, KeyError) as ex:
             self.report({'ERROR'}, str(ex).strip('"\''))
             return {'CANCELLED'}
@@ -94,6 +100,7 @@ class IMPORT_SCENE_OT_nfsu2_world(bpy.types.Operator, ImportHelper):
         layout.prop(self, 'instances')
         layout.prop(self, 'textures')
         layout.prop(self, 'skip_panoramas')
+        layout.prop(self, 'lighting')
         layout.prop(self, 'collision')
         layout.prop(self, 'clear')
 
