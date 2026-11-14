@@ -13,7 +13,7 @@ A **two-way converter** for world geometry and textures: game files → editable
 |---|---|---|
 | Geometry (`0x80134010` SolidObjects) | Blender import of any sections, with scenery instances | Blender export: edited meshes (positions, UVs, prelight colours, any vertex/triangle count ≤ 65535 verts) and **new objects** |
 | Textures (`0xB3300000` packs) | PNG/TGA export; real UV-mapped image materials in Blender (alpha only where the game uses it) | Re-import of edited PNG/TGA: re-encoded to the original format (DXT1/DXT3/DXT5/P8/ARGB8), same size, mips regenerated |
-| Section layout | parsed | sections stay on 2 KiB boundaries; `L4Rx.BUN` section table (offset / size / size-without-pixels) updated |
+| Section layout | parsed | sections stay on 2 KiB boundaries, and at their original offsets where the padding in front of them absorbs the change; `L4Rx.BUN` section table (offset / size / size-without-pixels) updated |
 | Collision (`0x80034130`) | parsed; optional wireframe `COLLISION_<tag>` mesh in Blender | new objects get ground collision (and optional walls); grid, cell refs and bounds rebuilt exactly like the shipped packs |
 | Scenery placements (`0x80034100`) | instances placed in Blender | new objects get a placement (the game only draws placed models); moved/rotated props written back; bounding tree rebuilt |
 | Visibility / drivable areas (`0x80034150`, in `L4Rx.BUN`) | parsed (boundaries, visible lists, loading sections) | edited by the road builder (boundaries extended, visible lists updated) |

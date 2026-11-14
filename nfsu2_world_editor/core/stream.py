@@ -2,11 +2,12 @@
 
 :class:`Region` parses the streaming file into a :mod:`bchunk` tree, lets callers
 edit chunks of any section, and writes a new pair of files. Sections stay on
-their 2 KiB boundaries: the zero-padding chunk between two sections is resized,
-so a section that grows or shrinks moves every later section by a multiple of
-2048 bytes (their bytes are unchanged) and the L4 table offsets, sizes and
-"size without texture pixels" fields are updated. Unmodified input gives
-byte-identical output.
+their 2 KiB boundaries: the zero-padding chunk before each section is resized.
+Every section keeps its original file offset whenever the padding in front of
+it can absorb the size change of earlier sections (the shipped files leave
+large gaps); otherwise it moves by a multiple of 2048 bytes (its bytes are
+unchanged). The L4 table offsets, sizes and "size without texture pixels"
+fields are updated. Unmodified input gives byte-identical output.
 """
 import os
 import struct
@@ -85,10 +86,16 @@ class Region:
         """-> (stream bytes, l4 bytes) with every edit applied."""
         out = bytearray()
         newpos = {}
-        for c in self.chunks:
+        chunks = self.chunks
+        for i, c in enumerate(chunks):
             if c.offset is not None:
                 newpos[c.offset] = len(out)
-            bchunk._write(c, len(out), out, 0)
+            nxt = chunks[i + 1] if i + 1 < len(chunks) else None
+            if (c.id == 0 and c.pad_mod == SECTION_ALIGN and c.pad_target is not None
+                    and nxt is not None and nxt.offset is not None):
+                self._write_section_pad(c, nxt.offset, out)
+            else:
+                bchunk._write(c, len(out), out, 0)
         newpos[len(self.src)] = len(out)
 
         def remap(o):
@@ -108,6 +115,17 @@ class Region:
             q = self.table_offset + e['index'] * SECTION_ENTRY_SIZE
             struct.pack_into('<3I', l4, q + 0x14, no, ns, ng)
         return out, l4
+
+    @staticmethod
+    def _write_section_pad(c, target, out):
+        """Zero chunk in front of a section: land the section on its original
+        offset ``target`` if possible, else on the next 2 KiB boundary."""
+        pos = len(out)
+        minimal = (c.pad_target - (pos + 8)) % SECTION_ALIGN
+        keep = target - (pos + 8)
+        n = keep if keep >= minimal else minimal
+        out += struct.pack('<II', 0, n)
+        out += c.data if n == len(c.data) else bytes(n)
 
     def write(self, out_dir, stream_name=None, l4_name=None):
         """Write ``STREAM<region>.BUN`` and ``<region>.BUN`` into ``out_dir``.

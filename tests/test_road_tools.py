@@ -224,3 +224,5 @@ def test_tracks_instance_writeback_and_placement():
     assert sp.instance(i)['t'] == tuple(x + 5.0 for x in rec['t'])
     stream, _ = reg.build()
     assert bchunk.serialize(bchunk.parse(stream)) == stream
+    # the padding behind C22 absorbs the growth: the file keeps its size
+    assert len(stream) == len(reg.src)
